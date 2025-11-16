@@ -1,34 +1,36 @@
 import requests
 import time
 import threading
-from collections import deque
 import statistics
 import os
-import json
+from collections import deque
 from typing import List, Dict, Optional, Tuple, Callable
 from flask import Flask, jsonify
 
 # Định nghĩa cấu trúc dữ liệu cho dự đoán
 PredictionResult = Dict[str, any]
 
+# Kích thước tối đa của lịch sử (cần đủ cho các thuật toán dài nhất, ví dụ 30)
+MAX_HISTORY_SIZE = 30
+
 # =========================================================
 # I. KHU VỰC ĐỊNH NGHĨA THUẬT TOÁN (50 CHIẾN LƯỢC VIP PRO)
-# =========================================================
 # Tất cả các thuật toán phải nhận 3 tham số: history, totals, win_log
-# và trả về Dict[str, any] với 'du_doan' (Tài/Xỉu) và 'do_tin_cay' (0-100)
+# và trả về Dict[str, any] với 'du_doan' (Tài/Xỉu) và 'do_tin_cay' (50.0 - 100.0)
+# =========================================================
 
 # ==================== KHỐI 1: XU HƯỚNG & ĐỘNG LƯỢNG (TREND & MOMENTUM) ====================
 
 def ai1_sma_crossover_5_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Moving Average Crossover: Dự đoán theo sự giao cắt của MA 5 và MA 10 phiên."""
     if len(totals) < 10:
-        return {"du_doan": "Tài", "do_tin_cay": 55.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
     t_list = list(totals)
     ma5 = statistics.mean(t_list[-5:])
     ma10 = statistics.mean(t_list[-10:])
     
-    if ma5 > ma10 and ma5 >= 10.5:
+    if ma5 > ma10 and ma5 >= 11.5:
         # Xu hướng tăng mạnh (Tài)
         return {"du_doan": "Tài", "do_tin_cay": 88.5}
     if ma5 < ma10 and ma5 <= 10.5:
@@ -40,7 +42,7 @@ def ai1_sma_crossover_5_10(history: deque, totals: deque, win_log: deque) -> Pre
 def ai2_rsi_analog_14(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Chỉ báo sức mạnh tương đối (RSI): Đo lường 'Quá mua' (Overbought > 12.5) hoặc 'Quá bán' (Oversold < 8.5) trong 14 phiên."""
     if len(totals) < 14:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     window = list(totals)[-14:]
     avg = statistics.mean(window)
@@ -57,26 +59,26 @@ def ai2_rsi_analog_14(history: deque, totals: deque, win_log: deque) -> Predicti
 def ai3_trend_slope_linear_6(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Độ dốc xu hướng tuyến tính: Phân tích độ dốc của tổng điểm trong 6 phiên gần nhất."""
     if len(totals) < 6:
-        return {"du_doan": "Tài", "do_tin_cay": 58.1}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
     # Tính độ dốc (Slope) đơn giản: (Y2 - Y1) / (X2 - X1)
     t_list = list(totals)
     slope = (t_list[-1] - t_list[-6]) / 5
     
-    if slope >= 0.8:
+    if slope >= 1.0:
         # Độ dốc dương mạnh -> Tiếp tục Tài
         return {"du_doan": "Tài", "do_tin_cay": 89.6}
-    if slope <= -0.8:
+    if slope <= -1.0:
         # Độ dốc âm mạnh -> Tiếp tục Xỉu
         return {"du_doan": "Xỉu", "do_tin_cay": 89.4}
         
-    # Trung tính, dự đoán ngược lại
-    return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 65.3}
+    # Trung tính, dự đoán theo kết quả gần nhất
+    return {"du_doan": history[-1], "do_tin_cay": 65.3}
 
 def ai4_macd_signal_5_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Moving Average Convergence Divergence (MACD): Mô phỏng MACD bằng cách so sánh MA Ngắn (5) và Dài (10)."""
     if len(totals) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 54.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
     
     t_list = list(totals)
     ma5 = statistics.mean(t_list[-5:])
@@ -96,7 +98,7 @@ def ai4_macd_signal_5_10(history: deque, totals: deque, win_log: deque) -> Predi
 def ai5_momentum_breakout_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Động lượng phá vỡ: Nếu tổng điểm vượt qua Max hoặc Min 4 phiên gần nhất."""
     if len(totals) < 4:
-        return {"du_doan": "Tài", "do_tin_cay": 57.5}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     window = list(totals)[-4:]
     high = max(window[:-1]) # Max 3 phiên trước
@@ -116,7 +118,7 @@ def ai5_momentum_breakout_4(history: deque, totals: deque, win_log: deque) -> Pr
 def ai6_triple_trend_confirm(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Xác nhận xu hướng 3 lần liên tiếp: T T T -> Dự đoán Tài tiếp theo."""
     if len(history) < 3:
-        return {"du_doan": "Xỉu", "do_tin_cay": 52.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     last3 = list(history)[-3:]
     
@@ -130,13 +132,13 @@ def ai6_triple_trend_confirm(history: deque, totals: deque, win_log: deque) -> P
 def ai7_mid_range_stability_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Ổn định Dải giữa: Nếu 8 phiên đều nằm trong phạm vi [9, 12], dự đoán Hồi quy (Xỉu)."""
     if len(totals) < 8:
-        return {"du_doan": "Tài", "do_tin_cay": 59.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     window = list(totals)[-8:]
     is_stable = all(9 <= t <= 12 for t in window)
     
     if is_stable:
-        # Thị trường ổn định, dự đoán phiên tiếp theo sẽ là Xỉu (vì 9, 10 là Xỉu, 11, 12 là Tài, xu hướng trung tính dễ về Xỉu hơn)
+        # Thị trường ổn định, dễ về Xỉu (vì 9, 10 là Xỉu, 11, 12 là Tài, nhưng 10.5 là trung bình)
         return {"du_doan": "Xỉu", "do_tin_cay": 85.0}
         
     return {"du_doan": history[-1], "do_tin_cay": 70.0}
@@ -144,7 +146,7 @@ def ai7_mid_range_stability_8(history: deque, totals: deque, win_log: deque) -> 
 def ai8_volume_oscillator_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mô phỏng Dao động Tần suất (Volume Oscillator): So sánh Tần suất Tài/Xỉu ngắn (3) và dài (5)."""
     if len(history) < 5:
-        return {"du_doan": "Tài", "do_tin_cay": 51.5}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     hist_list = list(history)
     t3 = hist_list[-3:].count("Tài")
@@ -162,7 +164,7 @@ def ai8_volume_oscillator_5(history: deque, totals: deque, win_log: deque) -> Pr
 def ai9_exponential_ma_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Exponential Moving Average (EMA) 4 phiên: Nhấn mạnh vào kết quả gần nhất."""
     if len(totals) < 4:
-        return {"du_doan": "Xỉu", "do_tin_cay": 59.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
     
     t_list = list(totals)[-4:]
     # Giả lập EMA: 40% Total[-1], 30% Total[-2], 20% Total[-3], 10% Total[-4]
@@ -178,162 +180,172 @@ def ai9_exponential_ma_4(history: deque, totals: deque, win_log: deque) -> Predi
 def ai10_keltner_bands_5_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mô phỏng Keltner Channels: Độ lệch giữa MA 5 và MA 10."""
     if len(totals) < 10:
-        return {"du_doan": "Tài", "do_tin_cay": 57.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
     t_list = list(totals)
     ma5 = statistics.mean(t_list[-5:])
     ma10 = statistics.mean(t_list[-10:])
     
-    # Kênh trên/dưới giả lập
-    upper_channel = ma10 + 1.5
-    lower_channel = ma10 - 1.5
+    # Kênh trên/dưới giả lập dựa trên độ lệch chuẩn (volatility)
+    std_dev = statistics.stdev(t_list[-10:]) if len(t_list[-10:]) > 1 else 0
     
-    if ma5 > upper_channel:
+    upper_channel = ma10 + (std_dev * 1.5)
+    lower_channel = ma10 - (std_dev * 1.5)
+    
+    if ma5 > upper_channel and t_list[-1] > upper_channel:
         # Vượt kênh trên -> Overbought, dự đoán Hồi quy (Xỉu)
-        return {"du_doan": "Xỉu", "do_tin_cay": 91.0}
-    if ma5 < lower_channel:
+        return {"du_doan": "Xỉu", "do_tin_cay": 92.0}
+    
+    if ma5 < lower_channel and t_list[-1] < lower_channel:
         # Vượt kênh dưới -> Oversold, dự đoán Hồi quy (Tài)
-        return {"du_doan": "Tài", "do_tin_cay": 90.5}
+        return {"du_doan": "Tài", "do_tin_cay": 91.8}
         
-    # Trong kênh, dự đoán theo xu hướng ngắn hạn
-    return {"du_doan": "Tài" if ma5 >= 10.5 else "Xỉu", "do_tin_cay": 73.0}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
-# ==================== KHỐI 2: ĐẢO CHIỀU & HỒI QUY (REVERSAL & MEAN REVERSION) ====================
+# ==================== KHỐI 2: ĐẢO CHIỀU & HỒI QUY (REVERSAL & REGRESSION) ====================
 
 def ai11_mean_reversion_15(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Hồi quy trung bình: Nếu MA 15 phiên quá xa mức 10.5, dự đoán đảo chiều về mức trung tính."""
+    """Hồi quy về mức trung bình 10.5: Nếu MA 15 phiên lệch xa (trên 12.5 hoặc dưới 8.5)."""
     if len(totals) < 15:
-        return {"du_doan": "Xỉu", "do_tin_cay": 55.5}
-        
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+    
     avg15 = statistics.mean(list(totals)[-15:])
     
-    if avg15 > 11.5:
-        # Quá Tài -> Hồi quy về Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 89.1}
-    if avg15 < 9.5:
-        # Quá Xỉu -> Hồi quy về Tài
-        return {"du_doan": "Tài", "do_tin_cay": 88.7}
+    if avg15 > 12.5:
+        # Xu hướng Tài quá đà -> dự đoán Xỉu (Hồi quy)
+        return {"du_doan": "Xỉu", "do_tin_cay": 91.0}
+    if avg15 < 8.5:
+        # Xu hướng Xỉu quá đà -> dự đoán Tài (Hồi quy)
+        return {"du_doan": "Tài", "do_tin_cay": 90.5}
         
-    return {"du_doan": history[-1], "do_tin_cay": 69.5}
+    return {"du_doan": history[-1], "do_tin_cay": 72.0}
 
 def ai12_three_star_reversal(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Mô hình 3 Ngôi sao (3 Star Reversal): T X T hoặc X T X -> Dự đoán đảo chiều tiếp tục."""
+    """Ba ngôi sao (Mô hình nến): T T X hoặc X X T."""
     if len(history) < 3:
-        return {"du_doan": "Tài", "do_tin_cay": 53.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
-    tail = list(history)[-3:]
+    last3 = list(history)[-3:]
     
-    if tail[0] == tail[2] and tail[0] != tail[1]:
-        # T X T -> Dự đoán Xỉu (vì kết quả cuối là T, dự đoán đảo)
-        if tail[0] == "Tài":
-            return {"du_doan": "Xỉu", "do_tin_cay": 90.0}
-        # X T X -> Dự đoán Tài (vì kết quả cuối là X, dự đoán đảo)
-        else:
-            return {"du_doan": "Tài", "do_tin_cay": 89.5}
-            
-    return {"du_doan": history[-1], "do_tin_cay": 68.5}
+    if last3 == ["Tài", "Tài", "Xỉu"]:
+        # Mô hình Đảo chiều giảm (Bearish Reversal) -> Dự đoán Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 89.0}
+    if last3 == ["Xỉu", "Xỉu", "Tài"]:
+        # Mô hình Đảo chiều tăng (Bullish Reversal) -> Dự đoán Tài
+        return {"du_doan": "Tài", "do_tin_cay": 88.5}
+        
+    return {"du_doan": history[-1], "do_tin_cay": 67.0}
 
 def ai13_parity_gap_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Khoảng trống Chẵn/Lẻ: Nếu 8 phiên gần nhất có sự mất cân bằng Chẵn/Lẻ quá lớn, dự đoán bên còn lại."""
-    if len(totals) < 8:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.0}
+    """Khoảng cách Parity 8 phiên: Nếu Tài/Xỉu chênh lệch quá 6/2, dự đoán Hồi quy."""
+    if len(history) < 8:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
-    last8 = list(totals)[-8:]
-    evens = sum(1 for t in last8 if t % 2 == 0) # Xỉu
-    odds = 8 - evens # Tài
+    last8 = list(history)[-8:]
+    t_count = last8.count("Tài")
+    x_count = last8.count("Xỉu")
     
-    if evens >= 7:
-        # Quá nhiều chẵn (Xỉu) -> Dự đoán Lẻ (Tài)
-        return {"du_doan": "Tài", "do_tin_cay": 87.0}
-    if odds >= 7:
-        # Quá nhiều lẻ (Tài) -> Dự đoán Chẵn (Xỉu)
-        return {"du_doan": "Xỉu", "do_tin_cay": 87.5}
+    if t_count >= 6 and x_count <= 2:
+        # Tài chiếm ưu thế tuyệt đối -> Hồi quy Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 91.5}
+    if x_count >= 6 and t_count <= 2:
+        # Xỉu chiếm ưu thế tuyệt đối -> Hồi quy Tài
+        return {"du_doan": "Tài", "do_tin_cay": 91.2}
         
-    return {"du_doan": history[-1], "do_tin_cay": 70.8}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai14_three_white_soldiers(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Ba người lính trắng: 3 phiên Tài liên tiếp và mỗi phiên có Tổng điểm tăng dần."""
-    if len(totals) < 3 or len(history) < 3:
-        return {"du_doan": "Tài", "do_tin_cay": 54.5}
-    
-    last3_h = list(history)[-3:]
-    last3_t = list(totals)[-3:]
-    
-    if last3_h == ["Tài", "Tài", "Tài"] and last3_t[0] < last3_t[1] < last3_t[2]:
-        # Tín hiệu Tài rất mạnh
-        return {"du_doan": "Tài", "do_tin_cay": 94.0}
-    
-    if last3_h == ["Xỉu", "Xỉu", "Xỉu"] and last3_t[0] > last3_t[1] > last3_t[2]:
-        # Tín hiệu Xỉu rất mạnh (Ba con quạ đen)
-        return {"du_doan": "Xỉu", "do_tin_cay": 93.5}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 67.5}
-
-def ai15_fibonacci_reversal_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Đảo chiều Fibonacci 3: Nếu có 3 kết quả giống nhau liên tiếp (TTT hoặc XXX), dự đoán đảo chiều."""
+    """Ba lính trắng (Mô hình nến): T T T (có độ tin cậy cao)."""
     if len(history) < 3:
-        return {"du_doan": "Xỉu", "do_tin_cay": 52.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     last3 = list(history)[-3:]
     
     if last3 == ["Tài", "Tài", "Tài"]:
-        # TTT -> Đảo chiều sang Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 88.0}
+        # Xác nhận xu hướng tăng mạnh
+        return {"du_doan": "Tài", "do_tin_cay": 94.0}
     if last3 == ["Xỉu", "Xỉu", "Xỉu"]:
-        # XXX -> Đảo chiều sang Tài
-        return {"du_doan": "Tài", "do_tin_cay": 87.8}
+        # Xác nhận xu hướng giảm mạnh
+        return {"du_doan": "Xỉu", "do_tin_cay": 93.5}
         
     return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
+def ai15_fibonacci_reversal_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Hồi quy Fibonacci 3 phiên: Nếu Total[-1] giảm/tăng 50% so với Total[-3]."""
+    if len(totals) < 3:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+    
+    t_list = list(totals)[-3:]
+    
+    # Khoảng cách 2 phiên
+    range_3 = abs(t_list[0] - t_list[1])
+    # Khoảng cách phiên gần nhất
+    range_1 = abs(t_list[1] - t_list[2])
+    
+    if t_list[0] < t_list[1] and t_list[2] < t_list[1]:
+        # Tăng mạnh -> giảm mạnh (tạo đỉnh), nếu Total[-1] nhỏ hơn trung bình Tài (14.5)
+        if t_list[2] < 14 and range_1 >= range_3 * 0.5:
+            return {"du_doan": "Xỉu", "do_tin_cay": 90.0}
+    
+    if t_list[0] > t_list[1] and t_list[2] > t_list[1]:
+        # Giảm mạnh -> tăng mạnh (tạo đáy), nếu Total[-1] lớn hơn trung bình Xỉu (7.5)
+        if t_list[2] > 7 and range_1 >= range_3 * 0.5:
+            return {"du_doan": "Tài", "do_tin_cay": 89.5}
+            
+    return {"du_doan": history[-1], "do_tin_cay": 68.0}
+
 def ai16_flip_flop_reversal_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Đảo ngược sau chuỗi 5: Nếu có 5 phiên liên tiếp là T/X/T/X/T hoặc ngược lại, dự đoán tiếp tục xu hướng cuối."""
+    """Đảo chiều Flip-Flop 5 phiên: T X T X T -> Dự đoán X."""
     if len(history) < 5:
-        return {"du_doan": "Tài", "do_tin_cay": 55.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-5:])
     
     if seq == "TXTXT":
-        # Chuỗi xen kẽ hoàn hảo -> Dự đoán tiếp tục T (Tài)
-        return {"du_doan": "Tài", "do_tin_cay": 90.0}
+        # Dự đoán Xỉu (chấm dứt mẫu xen kẽ)
+        return {"du_doan": "Xỉu", "do_tin_cay": 91.0}
     if seq == "XTXTX":
-        # Chuỗi xen kẽ hoàn hảo -> Dự đoán tiếp tục X (Xỉu)
-        return {"du_doan": "Xỉu", "do_tin_cay": 89.5}
+        # Dự đoán Tài (chấm dứt mẫu xen kẽ)
+        return {"du_doan": "Tài", "do_tin_cay": 90.5}
         
-    return {"du_doan": history[-1], "do_tin_cay": 69.0}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai17_total_range_mid_reversion(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Hồi quy về Dải giữa Tổng điểm: Nếu Total[-1] quá gần 4 hoặc 17, dự đoán đảo chiều."""
+    """Hồi quy về Dải giữa (9-12): Nếu Total[-1] là cực đoan (4, 5, 16, 17), dự đoán hồi quy về giữa."""
     if not totals:
-        return {"du_doan": "Xỉu", "do_tin_cay": 51.0}
-        
+        return {"du_doan": "Tài", "do_tin_cay": 50.0}
+    
     current = totals[-1]
     
     if current <= 5:
-        # Biên Xỉu mạnh -> Đảo chiều về Tài
-        return {"du_doan": "Tài", "do_tin_cay": 92.0}
+        # Cực Xỉu -> Hồi quy Tài
+        return {"du_doan": "Tài", "do_tin_cay": 93.0}
     if current >= 16:
-        # Biên Tài mạnh -> Đảo chiều về Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 91.5}
+        # Cực Tài -> Hồi quy Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 92.5}
         
-    return {"du_doan": history[-1], "do_tin_cay": 67.0}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai18_anti_martingale_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Chống Martingale: Sau 2 phiên Tài/Xỉu liên tiếp, dự đoán đảo chiều (T T X -> X)."""
+    """Chống Martingale: Nếu 3 phiên Tài/Xỉu liên tiếp, dự đoán Hồi quy (ngược lại)."""
     if len(history) < 3:
-        return {"du_doan": "Tài", "do_tin_cay": 54.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     last3 = list(history)[-3:]
     
-    if last3[0] == last3[1] and last3[1] != last3[2]:
-        # T T X hoặc X X T. Tức là vừa bị lật kèo. Dự đoán tiếp tục lật kèo
-        return {"du_doan": last3[0], "do_tin_cay": 86.0}
+    if last3 == ["Tài", "Tài", "Tài"]:
+        # Chống Martingale Tài -> Dự đoán Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 87.0}
+    if last3 == ["Xỉu", "Xỉu", "Xỉu"]:
+        # Chống Martingale Xỉu -> Dự đoán Tài
+        return {"du_doan": "Tài", "do_tin_cay": 86.5}
         
-    return {"du_doan": history[-1], "do_tin_cay": 71.0}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai19_long_term_alternating_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Xen kẽ dài hạn 10: Nếu 10 phiên có sự xen kẽ cao (7-8 lần đổi), dự đoán tiếp tục đảo chiều."""
     if len(history) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     last10 = list(history)[-10:]
     switches = sum(1 for i in range(1, 10) if last10[i] != last10[i-1])
@@ -347,7 +359,7 @@ def ai19_long_term_alternating_10(history: deque, totals: deque, win_log: deque)
 def ai20_oscillator_divergence_7(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Phân kỳ Dao động (Divergence): Total đi xuống nhưng Tần suất Tài (history) lại đi lên (phân kỳ)."""
     if len(totals) < 7:
-        return {"du_doan": "Tài", "do_tin_cay": 58.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     t_list = list(totals)[-7:]
     h_list = list(history)[-7:]
@@ -373,15 +385,15 @@ def ai20_oscillator_divergence_7(history: deque, totals: deque, win_log: deque) 
 def ai21_1_2_3_pattern(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mẫu 1-2-3 (T X X X T T T): Dự đoán lật kèo sau khi mô hình hoàn tất."""
     if len(history) < 6:
-        return {"du_doan": "Tài", "do_tin_cay": 53.5}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-6:])
     
     if seq == "TXXXTT":
-        # Sau 3 Xỉu và 2 Tài, dự đoán Tài tiếp (hoàn thành 1-2-3-T)
+        # Sau 3 Xỉu và 2 Tài, dự đoán Tài tiếp
         return {"du_doan": "Tài", "do_tin_cay": 87.0}
     if seq == "XTTTXX":
-        # Sau 3 Tài và 2 Xỉu, dự đoán Xỉu tiếp (hoàn thành 1-2-3-X)
+        # Sau 3 Tài và 2 Xỉu, dự đoán Xỉu tiếp
         return {"du_doan": "Xỉu", "do_tin_cay": 86.5}
         
     return {"du_doan": history[-1], "do_tin_cay": 70.0}
@@ -389,7 +401,7 @@ def ai21_1_2_3_pattern(history: deque, totals: deque, win_log: deque) -> Predict
 def ai22_double_alternating_6(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mẫu xen kẽ kép (T T X X T T -> Dự đoán X X)."""
     if len(history) < 6:
-        return {"du_doan": "Xỉu", "do_tin_cay": 55.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-6:])
     
@@ -405,13 +417,12 @@ def ai22_double_alternating_6(history: deque, totals: deque, win_log: deque) -> 
 def ai23_ab_c_a_b_c_pattern(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mô hình lặp lại 6 phiên (T X X T X X hoặc X T T X T T)."""
     if len(history) < 6:
-        return {"du_doan": "Tài", "do_tin_cay": 56.5}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     last6 = list(history)[-6:]
     
     if last6[0] == last6[3] and last6[1] == last6[4] and last6[2] == last6[5]:
-        # Lặp lại mẫu 3 phiên (ABCABC)
-        # TXXTXX hoặc XTTXTT -> Dự đoán tiếp tục A (last6[0])
+        # Lặp lại mẫu 3 phiên (ABCABC) -> Dự đoán tiếp tục A (last6[0])
         return {"du_doan": last6[0], "do_tin_cay": 91.0}
         
     return {"du_doan": history[-1], "do_tin_cay": 68.0}
@@ -419,348 +430,370 @@ def ai23_ab_c_a_b_c_pattern(history: deque, totals: deque, win_log: deque) -> Pr
 def ai24_long_term_alternating_7(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Phân tích xen kẽ 7 phiên: Nếu 7 phiên có 5 lần đảo chiều, dự đoán tiếp tục đảo chiều."""
     if len(history) < 7:
-        return {"du_doan": "Xỉu", "do_tin_cay": 54.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     last7 = list(history)[-7:]
     switches = sum(1 for i in range(1, 7) if last7[i] != last7[i-1])
     
     if switches >= 5:
-        # Chuỗi quá xen kẽ -> Dự đoán đảo chiều
-        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 88.0}
+        # Mẫu xen kẽ cao -> Dự đoán đảo chiều
+        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 89.0}
         
-    return {"du_doan": history[-1], "do_tin_cay": 69.5}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai25_short_mid_trend_confirm_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Xác nhận xu hướng ngắn/trung: Nếu 3/5 phiên Tài, và Tài[-1] & Tài[-2], dự đoán Tài."""
-    if len(history) < 5:
-        return {"du_doan": "Tài", "do_tin_cay": 57.0}
-        
+    """Xác nhận Xu hướng Ngắn-Trung (5 phiên): Nếu 4/5 phiên Tài/Xỉu và Total[-1] Tài/Xỉu biên."""
+    if len(history) < 5 or len(totals) < 1:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+
     last5 = list(history)[-5:]
     t_count = last5.count("Tài")
-    
-    if t_count >= 4:
-        return {"du_doan": "Tài", "do_tin_cay": 87.5}
-    if t_count <= 1:
-        return {"du_doan": "Xỉu", "do_tin_cay": 87.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 70.5}
+    x_count = last5.count("Xỉu")
+    last_total = totals[-1]
+
+    if t_count >= 4 and last_total >= 14:
+        return {"du_doan": "Tài", "do_tin_cay": 92.5}
+    if x_count >= 4 and last_total <= 7:
+        return {"du_doan": "Xỉu", "do_tin_cay": 92.0}
+
+    return {"du_doan": history[-1], "do_tin_cay": 73.0}
+
+# ==================== KHỐI 4: BIẾN ĐỘNG & ỔN ĐỊNH (VOLATILITY & STABILITY) ====================
 
 def ai26_z_score_deviation_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Độ lệch Z-Score: Nếu Total[-1] lệch quá 1.5 độ lệch chuẩn (SD) so với MA 10, dự đoán hồi quy."""
+    """Độ lệch Z-Score: Nếu Total[-1] lệch > 2.0 độ lệch chuẩn trong 10 phiên, dự đoán hồi quy."""
     if len(totals) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 58.5}
-        
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+
     window = list(totals)[-10:]
-    avg = statistics.mean(window)
-    sd = statistics.stdev(window) if len(window) > 1 else 1.0
-    current = totals[-1]
-    
-    z_score = (current - avg) / sd
-    
-    if z_score > 1.5:
-        # Quá cao -> Hồi quy Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 91.5}
-    if z_score < -1.5:
-        # Quá thấp -> Hồi quy Tài
-        return {"du_doan": "Tài", "do_tin_cay": 91.0}
+    try:
+        mean = statistics.mean(window)
+        std_dev = statistics.stdev(window)
+        current = totals[-1]
+
+        if std_dev == 0:
+            return {"du_doan": history[-1], "do_tin_cay": 55.0} # Không biến động
+
+        z_score = (current - mean) / std_dev
+
+        if z_score > 2.0:
+            return {"du_doan": "Xỉu", "do_tin_cay": 93.0} # Lệch Tài -> Hồi quy Xỉu
+        if z_score < -2.0:
+            return {"du_doan": "Tài", "do_tin_cay": 92.5} # Lệch Xỉu -> Hồi quy Tài
+
+    except statistics.StatisticsError:
+        pass # Xử lý trường hợp chỉ có một phần tử
         
-    return {"du_doan": history[-1], "do_tin_cay": 69.0}
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai27_head_shoulder_analog_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Mô hình Vai-Đầu-Vai (Head & Shoulders): Mô phỏng H-S bằng 4 phiên Tổng điểm."""
+    """Mô phỏng Head & Shoulders (4 phiên): T(lớn) X(nhỏ) T(cực lớn) X(nhỏ) T(lớn) -> Dự đoán X."""
     if len(totals) < 4:
-        return {"du_doan": "Tài", "do_tin_cay": 52.0}
-        
-    t1, t2, t3, t4 = list(totals)[-4:]
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+
+    t = list(totals)[-4:]
     
-    # H&S Bullish: t1 < t2 > t3 < t4 (Xu hướng giảm ngắn hạn bị phá vỡ)
-    if t1 < t2 and t2 > t3 and t3 < t4 and t4 > t1:
-        return {"du_doan": "Tài", "do_tin_cay": 89.0}
-    
-    # H&S Bearish: t1 > t2 < t3 > t4 (Xu hướng tăng ngắn hạn bị phá vỡ)
-    if t1 > t2 and t2 < t3 and t3 > t4 and t4 < t1:
-        return {"du_doan": "Xỉu", "do_tin_cay": 88.5}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 67.5}
+    # Mô hình Đỉnh (Mô phỏng Head & Shoulders): Cao - Thấp - Cực Cao - Thấp
+    # t[0] < t[2] và t[1] < t[2] và t[3] < t[2]
+    if t[0] < t[2] and t[1] < t[2] and t[3] < t[2] and t[2] >= 15:
+        return {"du_doan": "Xỉu", "do_tin_cay": 90.0}
+
+    # Mô hình Đáy (Mô phỏng Inverse Head & Shoulders): Thấp - Cao - Cực Thấp - Cao
+    # t[0] > t[2] và t[1] > t[2] và t[3] > t[2]
+    if t[0] > t[2] and t[1] > t[2] and t[3] > t[2] and t[2] <= 6:
+        return {"du_doan": "Tài", "do_tin_cay": 89.5}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai28_volatility_compression_6(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Nén Biến động: Nếu Phạm vi Max-Min 6 phiên nhỏ (< 3), dự đoán bùng nổ (Breakout) Tài/Xỉu theo Total cuối."""
+    """Nén Biến động (Volatility Compression) 6 phiên: Nếu Total Range < 4 (giảm biên độ) dự đoán Bùng nổ (ngược lại)."""
     if len(totals) < 6:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.0}
-        
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+    
     window = list(totals)[-6:]
     t_range = max(window) - min(window)
-    
-    if t_range < 3:
-        # Nén biến động mạnh -> Dự đoán bùng nổ theo Total cuối cùng
-        return {"du_doan": "Tài" if totals[-1] >= 11 else "Xỉu", "do_tin_cay": 90.0}
+
+    if t_range <= 3:
+        # Volatility Compression -> Dự đoán Bùng nổ (ngược lại kết quả cuối cùng)
+        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 88.0}
         
     return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai29_momentum_indicator_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Chỉ báo Động lượng 8 phiên: So sánh Total[-1] và Total[-8]."""
+    """Chỉ báo Động lượng 8 phiên: So sánh sự thay đổi Total[-1] so với 8 phiên trước."""
     if len(totals) < 8:
-        return {"du_doan": "Tài", "do_tin_cay": 54.5}
-        
-    current = totals[-1]
-    prev = totals[-8]
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
-    diff = current - prev
+    t_list = list(totals)
+    change = t_list[-1] - t_list[-8]
     
-    if diff >= 3:
-        # Động lượng Tài mạnh -> Tiếp tục Tài
-        return {"du_doan": "Tài", "do_tin_cay": 88.5}
-    if diff <= -3:
-        # Động lượng Xỉu mạnh -> Tiếp tục Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 88.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 71.8}
-
-def ai30_extreme_totals_bias(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Thiên vị Tổng điểm cực trị: Nếu Total[-1] là 4, 5, 16, hoặc 17, dự đoán Hồi quy cực mạnh."""
-    if not totals:
-        return {"du_doan": "Xỉu", "do_tin_cay": 52.5}
-        
-    current = totals[-1]
-    
-    if current in [4, 5]:
-        # Cực Xỉu -> Hồi quy Tài
-        return {"du_doan": "Tài", "do_tin_cay": 93.5}
-    if current in [16, 17]:
-        # Cực Tài -> Hồi quy Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 93.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 68.5}
-
-# ==================== KHỐI 4: BIẾN ĐỘNG & ỔN ĐỊNH (VOLATILITY & STABILITY) ====================
-
-def ai31_mid_range_stability_break(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Phá vỡ ổn định trung bình: 5 phiên liên tiếp 10 hoặc 11 -> Phiên thứ 6 dự đoán ngược lại."""
-    if len(totals) < 5:
-        return {"du_doan": "Tài", "do_tin_cay": 55.0}
-        
-    last5 = list(totals)[-5:]
-    
-    if all(t in [10, 11] for t in last5):
-        # Ổn định trung bình quá lâu, dự đoán bùng nổ (Tài/Xỉu)
-        return {"du_doan": "Tài" if history[-1] == "Xỉu" else "Xỉu", "do_tin_cay": 89.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 70.0}
-
-def ai32_boundary_reversion_12(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Hồi quy Biên 12 phiên: Nếu Tổng điểm gần Biên (4, 5, 16, 17) chiếm quá 50% trong 12 phiên."""
-    if len(totals) < 12:
-        return {"du_doan": "Xỉu", "do_tin_cay": 58.0}
-        
-    last12 = list(totals)[-12:]
-    boundary_count = sum(1 for t in last12 if t in [4, 5, 16, 17])
-    
-    if boundary_count >= 7:
-        # Quá nhiều biên -> Dự đoán Hồi quy về Trung bình (Xỉu 9, 10, 11, 12)
-        return {"du_doan": "Xỉu", "do_tin_cay": 87.5}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 69.0}
-
-def ai33_odd_streak_7(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Chuỗi Lẻ (Tài) 7 phiên: Nếu 7 phiên liên tiếp là Lẻ, dự đoán Chẵn (Xỉu)."""
-    if len(totals) < 7:
-        return {"du_doan": "Tài", "do_tin_cay": 56.5}
-        
-    last7_odd = all(t % 2 != 0 for t in list(totals)[-7:])
-    
-    if last7_odd:
-        # Chuỗi Lẻ (Tài) dài -> Dự đoán Chẵn (Xỉu)
-        return {"du_doan": "Xỉu", "do_tin_cay": 90.5}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 71.0}
-
-def ai34_even_bias_short_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Thiên vị Chẵn (Xỉu) ngắn 4: Nếu 4 phiên có 3 Chẵn, dự đoán Chẵn tiếp theo."""
-    if len(totals) < 4:
-        return {"du_doan": "Xỉu", "do_tin_cay": 54.0}
-        
-    last4 = list(totals)[-4:]
-    evens = sum(1 for t in last4 if t % 2 == 0)
-    
-    if evens >= 3:
-        # Thiên vị Chẵn (Xỉu) -> Dự đoán Xỉu
-        return {"du_doan": "Xỉu", "do_tin_cay": 88.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 68.5}
-
-def ai35_parity_switch_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Đảo chiều Chẵn/Lẻ 8: Nếu 8 phiên có 6 lần đổi Chẵn/Lẻ, dự đoán Tài (vì Tài dễ xảy ra khi chẵn lẻ xen kẽ)."""
-    if len(totals) < 8:
-        return {"du_doan": "Tài", "do_tin_cay": 55.5}
-        
-    last8 = list(totals)[-8:]
-    parity_switches = sum(1 for i in range(1, 8) if (last8[i] % 2) != (last8[i-1] % 2))
-    
-    if parity_switches >= 6:
-        # Chẵn/Lẻ xen kẽ cao -> Dự đoán Tài (xu hướng Lẻ)
-        return {"du_doan": "Tài", "do_tin_cay": 87.0}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 70.0}
-
-def ai36_algo_performance_switch(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Meta-Strategy: Đảo ngược dự đoán của phiên cuối nếu có 3 lần thua liên tiếp (dựa trên win_log)."""
-    if len(win_log) < 3 or not history:
-        return {"du_doan": "Tài", "do_tin_cay": 59.0}
-        
-    last3_losses = not win_log[-1] and not win_log[-2] and not win_log[-3]
-    
-    if last3_losses:
-        # Thua 3 lần liên tiếp -> Dự đoán ngược lại kết quả cuối cùng để phá chuỗi
-        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 92.5}
+    if change >= 4:
+        # Tăng mạnh -> Tiếp tục Tài
+        return {"du_doan": "Tài", "do_tin_cay": 91.5}
+    if change <= -4:
+        # Giảm mạnh -> Tiếp tục Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 91.0}
         
     return {"du_doan": history[-1], "do_tin_cay": 72.0}
 
-def ai37_majority_vote_top_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Bỏ phiếu đa số 5 Thuật toán Ngẫu nhiên: Tổng hợp kết quả từ 5 AI bất kỳ."""
-    if len(history) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 58.5}
-    
-    # CHÚ Ý: Vì không thể biết chính xác 5 AI nào mạnh nhất, ta sẽ sử dụng 5 AI tiêu biểu
-    # AI1 (SMA), AI4 (MACD), AI11 (MR), AI26 (Z-Score), AI45 (Adaptive ATR)
-    
-    votes = [
-        ai1_sma_crossover_5_10(history, totals, win_log)["du_doan"],
-        ai4_macd_signal_5_10(history, totals, win_log)["du_doan"],
-        ai11_mean_reversion_15(history, totals, win_log)["du_doan"],
-        ai26_z_score_deviation_10(history, totals, win_log)["du_doan"],
-        ai45_adaptive_atr_breakout(history, totals, win_log)["du_doan"] # Cần định nghĩa AI45
-    ]
-    
-    t_votes = votes.count("Tài")
-    x_votes = votes.count("Xỉu")
+def ai30_extreme_totals_bias(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Thiên vị Total Cực đoan: Nếu có > 3 lần Total >= 15 hoặc <= 6 trong 15 phiên, dự đoán hồi quy về trung bình."""
+    if len(totals) < 15:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
 
-    if t_votes > x_votes:
-        return {"du_doan": "Tài", "do_tin_cay": 94.0}
-    if x_votes > t_votes:
+    window = list(totals)[-15:]
+    extreme_high_count = sum(1 for t in window if t >= 15)
+    extreme_low_count = sum(1 for t in window if t <= 6)
+
+    if extreme_high_count >= 4:
+        # Quá nhiều Tài cực đoan -> Hồi quy Xỉu
         return {"du_doan": "Xỉu", "do_tin_cay": 93.5}
-        
+    if extreme_low_count >= 4:
+        # Quá nhiều Xỉu cực đoan -> Hồi quy Tài
+        return {"du_doan": "Tài", "do_tin_cay": 93.0}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
+
+# ==================== KHỐI 5: TỔNG HỢP & CHUYÊN SÂU (ADVANCED & ENSEMBLE) ====================
+
+def ai31_mid_range_stability_break(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Phá vỡ Ổn định Dải giữa: 6 phiên trong [9, 12], phiên thứ 7 là Tài/Xỉu biên (>=14 / <=7)."""
+    if len(totals) < 7:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+
+    window_prev_6 = list(totals)[-7:-1]
+    is_stable = all(9 <= t <= 12 for t in window_prev_6)
+    current = totals[-1]
+
+    if is_stable and current >= 14:
+        # Bùng nổ Tài sau ổn định -> Tiếp tục Tài
+        return {"du_doan": "Tài", "do_tin_cay": 94.0}
+    if is_stable and current <= 7:
+        # Bùng nổ Xỉu sau ổn định -> Tiếp tục Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 93.5}
+
     return {"du_doan": history[-1], "do_tin_cay": 75.0}
 
+def ai32_boundary_reversion_12(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Hồi quy Biên độ 12 phiên: Nếu 12 phiên liên tiếp Tài/Xỉu không cân bằng (> 8/4), dự đoán ngược."""
+    if len(history) < 12:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+
+    last12 = list(history)[-12:]
+    t_count = last12.count("Tài")
+    x_count = last12.count("Xỉu")
+
+    if t_count >= 9 and x_count <= 3:
+        # Ưu thế Tài quá lớn -> Hồi quy Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 92.0}
+    if x_count >= 9 and t_count <= 3:
+        # Ưu thế Xỉu quá lớn -> Hồi quy Tài
+        return {"du_doan": "Tài", "do_tin_cay": 91.8}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
+
+def ai33_odd_streak_7(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Chuỗi Số Lẻ (Odd Streak) 7 phiên: Nếu Total là số lẻ > 5 lần, dự đoán Số Chẵn (Hồi quy)."""
+    if len(totals) < 7:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+    
+    window = list(totals)[-7:]
+    odd_count = sum(1 for t in window if t % 2 != 0)
+
+    # Nếu 6/7 là lẻ, dự đoán chẵn (Dự đoán Xỉu vì 4, 6, 8, 10 là Xỉu, 12, 14, 16 là Tài)
+    if odd_count >= 6:
+        return {"du_doan": "Xỉu", "do_tin_cay": 88.0}
+        
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
+
+def ai34_even_bias_short_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Thiên vị Số Chẵn Ngắn (4 phiên): 4 Total chẵn liên tiếp -> Dự đoán Lẻ (Tài)."""
+    if len(totals) < 4:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+        
+    window = list(totals)[-4:]
+    is_all_even = all(t % 2 == 0 for t in window)
+
+    if is_all_even:
+        # Dự đoán Số Lẻ (ví dụ 5, 7, 9, 11, 13, 15, 17) -> Hướng về Tài
+        return {"du_doan": "Tài", "do_tin_cay": 90.0}
+        
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
+
+def ai35_parity_switch_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Đảo chiều Parity 8 phiên: Nếu Total[-1] chuyển từ Tài sang Xỉu hoặc ngược lại, và 8 phiên trước đều Tài/Xỉu biên."""
+    if len(totals) < 8 or len(history) < 8:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+
+    h_list = list(history)
+    
+    # Kiểm tra chuyển đổi Tài -> Xỉu
+    if h_list[-2] == "Tài" and h_list[-1] == "Xỉu":
+        # Kiểm tra 7 phiên Tài trước đó (Total Tài >= 14)
+        prev7_totals = list(totals)[-8:-1]
+        if all(t >= 13 for t in prev7_totals):
+            return {"du_doan": "Xỉu", "do_tin_cay": 94.5}
+            
+    # Kiểm tra chuyển đổi Xỉu -> Tài
+    if h_list[-2] == "Xỉu" and h_list[-1] == "Tài":
+        # Kiểm tra 7 phiên Xỉu trước đó (Total Xỉu <= 7)
+        prev7_totals = list(totals)[-8:-1]
+        if all(t <= 8 for t in prev7_totals):
+            return {"du_doan": "Tài", "do_tin_cay": 94.0}
+
+    return {"du_doan": history[-1], "do_tin_cay": 72.0}
+
+# ==================== KHỐI 6: CHIẾN LƯỢC TỔNG HỢP & NÂNG CAO ====================
+
+def ai36_algo_performance_switch(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Chuyển đổi Hiệu suất Thuật toán: Nếu 5 lần dự đoán liên tiếp Sai, dự đoán ngược lại kết quả cuối cùng."""
+    if len(win_log) < 5:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+
+    last5_win = list(win_log)[-5:]
+    
+    if all(w is False for w in last5_win):
+        # 5 lần thua liên tiếp -> Đảo ngược dự đoán (Tài nếu cuối là Xỉu, Xỉu nếu cuối là Tài)
+        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 95.0}
+
+    return {"du_doan": history[-1], "do_tin_cay": 75.0}
+
+def ai37_majority_vote_top_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
+    """Bỏ phiếu Đa số Top 5 (Mô phỏng): Nếu 4/5 phiên gần nhất Tài/Xỉu, dự đoán theo đa số."""
+    if len(history) < 5:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+    
+    last5 = list(history)[-5:]
+    t_count = last5.count("Tài")
+    x_count = last5.count("Xỉu")
+
+    if t_count >= 4:
+        return {"du_doan": "Tài", "do_tin_cay": 92.0}
+    if x_count >= 4:
+        return {"du_doan": "Xỉu", "do_tin_cay": 91.5}
+        
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
+
 def ai38_win_loss_balance_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Cân bằng Thắng/Thua: Dự đoán bên thua nhiều hơn trong 10 phiên sẽ thắng (Reversion to mean)."""
-    if len(history) < 10:
-        return {"du_doan": "Tài", "do_tin_cay": 57.0}
-        
-    last10 = list(history)[-10:]
-    t_count = last10.count("Tài")
-    x_count = 10 - t_count
+    """Cân bằng Thắng-Thua 10 phiên: Nếu Win Log mất cân bằng (> 7/3), dự đoán hồi quy."""
+    if len(win_log) < 10:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+
+    last10_win = list(win_log)[-10:]
+    win_count = sum(1 for w in last10_win if w is True)
     
-    diff = abs(t_count - x_count)
-    conf_boost = diff * 4.0 # Boost 4% cho mỗi điểm chênh lệch
-    
-    if t_count - x_count >= 3:
-        # Tài nhiều hơn 3 -> dự đoán Xỉu (bù đắp)
-        return {"du_doan": "Xỉu", "do_tin_cay": 60.0 + conf_boost}
-    if x_count - t_count >= 3:
-        # Xỉu nhiều hơn 3 -> dự đoán Tài (bù đắp)
-        return {"du_doan": "Tài", "do_tin_cay": 60.0 + conf_boost}
-        
-    return {"du_doan": history[-1], "do_tin_cay": 71.0}
+    # Nếu tỷ lệ thắng quá cao (> 70%), dự đoán thua (ngược lại kết quả gần nhất)
+    if win_count >= 7:
+        return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 89.0}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai39_fib_reversion_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Hồi quy Fibonacci 5: Dự đoán đảo chiều sau 5 kết quả Tài hoặc Xỉu liên tiếp."""
-    if len(history) < 5:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.5}
-        
-    seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-5:])
+    """Hồi quy Fibonacci 5 phiên: Nếu 5 Total liên tiếp giảm/tăng, dự đoán đảo chiều."""
+    if len(totals) < 5:
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
-    if seq == "TTTTT":
-        return {"du_doan": "Xỉu", "do_tin_cay": 91.0}
-    if seq == "XXXXX":
-        return {"du_doan": "Tài", "do_tin_cay": 90.5}
-            
-    return {"du_doan": history[-1], "do_tin_cay": 70.7}
+    t = list(totals)[-5:]
+    
+    # 5 phiên tăng liên tiếp
+    is_increasing = all(t[i] > t[i-1] for i in range(1, 5))
+    # 5 phiên giảm liên tiếp
+    is_decreasing = all(t[i] < t[i-1] for i in range(1, 5))
+
+    if is_increasing:
+        return {"du_doan": "Xỉu", "do_tin_cay": 93.0}
+    if is_decreasing:
+        return {"du_doan": "Tài", "do_tin_cay": 92.5}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai40_martingale_detector_4(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Bộ phát hiện Martingale: Dự đoán tiếp tục xu hướng sau 2 lần đảo ngược (TXTX -> T)."""
+    """Phát hiện Martingale (4): Nếu có 4 phiên xen kẽ T X T X, dự đoán Tài (để tránh chuỗi X T X T X)."""
     if len(history) < 4:
-        return {"du_doan": "Tài", "do_tin_cay": 55.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-4:])
     
     if seq == "TXTX":
-        # Chuỗi xen kẽ hoàn hảo -> Dự đoán tiếp tục xu hướng T
-        return {"du_doan": "Tài", "do_tin_cay": 86.5}
+        # Dự đoán Tài (chấm dứt chuỗi T X T X X)
+        return {"du_doan": "Tài", "do_tin_cay": 90.0}
     if seq == "XTXT":
-        # Chuỗi xen kẽ hoàn hảo -> Dự đoán tiếp tục xu hướng X
-        return {"du_doan": "Xỉu", "do_tin_cay": 86.0}
-            
-    return {"du_doan": history[-1], "do_tin_cay": 71.8}
+        # Dự đoán Xỉu (chấm dứt chuỗi X T X T T)
+        return {"du_doan": "Xỉu", "do_tin_cay": 89.5}
 
-# ==================== KHỐI 5: TỔNG HỢP & PHÂN TÍCH CHUYÊN SÂU ====================
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai41_variance_volatility_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Biến động Phương sai 5 phiên: Nếu SD > 3.0 (biến động cao) dự đoán Tài, ngược lại dự đoán Xỉu."""
+    """Biến động Phương sai 5 phiên: Nếu phương sai (Variance) cao (> 5.0), dự đoán Hồi quy (ngược lại)."""
     if len(totals) < 5:
-        return {"du_doan": "Xỉu", "do_tin_cay": 57.0}
-        
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
+
     window = list(totals)[-5:]
     try:
-        sd = statistics.stdev(window)
-    except statistics.StatisticsError:
-        sd = 0.0
+        variance = statistics.variance(window)
         
-    if sd > 3.0:
-        # Biến động cực cao -> Thường đi kèm Total lớn (Tài)
-        return {"du_doan": "Tài", "do_tin_cay": 88.8}
-    if sd <= 1.0:
-        # Ổn định cực cao -> Thường đi kèm Total nhỏ (Xỉu)
-        return {"du_doan": "Xỉu", "do_tin_cay": 87.5}
-            
-    return {"du_doan": history[-1], "do_tin_cay": 72.3}
+        if variance >= 6.0:
+            # Biến động cao -> Dự đoán Hồi quy (ngược lại kết quả cuối cùng)
+            return {"du_doan": "Xỉu" if history[-1] == "Tài" else "Tài", "do_tin_cay": 91.0}
+
+    except statistics.StatisticsError:
+        pass # Xử lý trường hợp chỉ có một phần tử
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai42_gap_filler_5(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Lấp đầy khoảng trống: Nếu một bên không xuất hiện 5 phiên, dự đoán nó sẽ xuất hiện."""
-    if len(history) < 5:
-        return {"du_doan": "Tài", "do_tin_cay": 56.0}
-        
-    last5 = list(history)[-5:]
-    if last5.count("Tài") == 0:
-        return {"du_doan": "Tài", "do_tin_cay": 90.0}
-    if last5.count("Xỉu") == 0:
-        return {"du_doan": "Xỉu", "do_tin_cay": 89.8}
-            
-    return {"du_doan": history[-1], "do_tin_cay": 71.6}
+    """Lấp đầy Khoảng trống 5 phiên: Nếu Total nhảy vọt từ < 7 lên > 14 (hoặc ngược lại), dự đoán lấp đầy (hồi quy)."""
+    if len(totals) < 2:
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
+
+    t_prev = totals[-2]
+    t_curr = totals[-1]
+
+    if t_prev <= 7 and t_curr >= 14:
+        # Nhảy vọt Xỉu -> Tài -> Dự đoán Xỉu (lấp khoảng trống)
+        return {"du_doan": "Xỉu", "do_tin_cay": 93.0}
+    if t_prev >= 14 and t_curr <= 7:
+        # Nhảy vọt Tài -> Xỉu -> Dự đoán Tài (lấp khoảng trống)
+        return {"du_doan": "Tài", "do_tin_cay": 92.5}
+
+    return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai43_double_frequency_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Mẫu 2-1 (TTX hoặc XXT): Dự đoán bên ngược lại tiếp tục (TTC)."""
+    """Tần suất kép 3 phiên: Nếu Total[-1] Tài và Total[-3] Tài, dự đoán Tài tiếp (xu hướng mạnh)."""
     if len(history) < 3:
-        return {"du_doan": "Xỉu", "do_tin_cay": 55.0}
-        
-    seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-3:])
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
     
-    if seq == "TTX":
-        # Sau 2 Tài, 1 Xỉu -> Dự đoán Xỉu tiếp
-        return {"du_doan": "Xỉu", "do_tin_cay": 87.6}
-    if seq == "XXT":
-        # Sau 2 Xỉu, 1 Tài -> Dự đoán Tài tiếp
-        return {"du_doan": "Tài", "do_tin_cay": 87.4}
-            
+    h_list = list(history)[-3:]
+    
+    if h_list[0] == "Tài" and h_list[2] == "Tài" and h_list[1] == "Xỉu":
+        # Mẫu T X T -> Dự đoán Tài tiếp
+        return {"du_doan": "Tài", "do_tin_cay": 88.0}
+    if h_list[0] == "Xỉu" and h_list[2] == "Xỉu" and h_list[1] == "Tài":
+        # Mẫu X T X -> Dự đoán Xỉu tiếp
+        return {"du_doan": "Xỉu", "do_tin_cay": 87.5}
+
     return {"du_doan": history[-1], "do_tin_cay": 70.0}
 
 def ai44_alternating_double_6(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Mẫu xen kẽ kép 6 phiên (T T X X T T -> Dự đoán X)."""
+    """Xen kẽ Kép 6 phiên: X X T T X X -> Dự đoán T T."""
     if len(history) < 6:
-        return {"du_doan": "Tài", "do_tin_cay": 56.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-6:])
     
-    if seq == "TTXXTT":
-        return {"du_doan": "Xỉu", "do_tin_cay": 90.7}
     if seq == "XXTTXX":
+        # Dự đoán Tài
         return {"du_doan": "Tài", "do_tin_cay": 90.5}
-            
+    if seq == "TTXXTT":
+        # Dự đoán Xỉu
+        return {"du_doan": "Xỉu", "do_tin_cay": 90.0}
+        
     return {"du_doan": history[-1], "do_tin_cay": 72.9}
 
 def ai45_adaptive_atr_breakout(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Adaptive ATR (Average True Range): Nếu Total[-1] vượt MA 5 + Range trung bình 10 phiên, dự đoán tiếp tục Breakout."""
     if len(totals) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 58.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     t_list = list(totals)
     ma5 = statistics.mean(t_list[-5:])
@@ -781,18 +814,18 @@ def ai45_adaptive_atr_breakout(history: deque, totals: deque, win_log: deque) ->
     return {"du_doan": history[-1], "do_tin_cay": 73.1}
 
 def ai46_low_volatility_break_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Bùng nổ sau Ổn định: Nếu Var < 2.0 (8 phiên) và Total cuối Tài/Xỉu biên, dự đoán tiếp tục Tài/Xỉu."""
+    """Bùng nổ sau Ổn định: Nếu Total Range < 2.0 (8 phiên) và Total cuối Tài/Xỉu biên, dự đoán tiếp tục Tài/Xỉu."""
     if len(totals) < 8:
-        return {"du_doan": "Tài", "do_tin_cay": 57.5}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     window = list(totals)[-8:]
     t_range = max(window) - min(window)
     last_total = totals[-1]
 
     if t_range <= 2.0:
-        if last_total >= 13: # Tài biên
+        if last_total >= 14: # Tài biên
             return {"du_doan": "Tài", "do_tin_cay": 91.0}
-        if last_total <= 8: # Xỉu biên
+        if last_total <= 7: # Xỉu biên
             return {"du_doan": "Xỉu", "do_tin_cay": 90.8}
             
     return {"du_doan": history[-1], "do_tin_cay": 70.9}
@@ -800,7 +833,7 @@ def ai46_low_volatility_break_8(history: deque, totals: deque, win_log: deque) -
 def ai47_super_trend_ma_5_streak_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Phối hợp MA (5 phiên) và Streak (3 phiên) để xác nhận xu hướng mạnh."""
     if len(totals) < 5 or len(history) < 3:
-        return {"du_doan": "Xỉu", "do_tin_cay": 59.0}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
         
     avg5 = statistics.mean(list(totals)[-5:])
     last3 = list(history)[-3:]
@@ -814,16 +847,16 @@ def ai47_super_trend_ma_5_streak_3(history: deque, totals: deque, win_log: deque
     return {"du_doan": history[-1], "do_tin_cay": 74.8}
 
 def ai48_mean_reversion_8(history: deque, totals: deque, win_log: deque) -> PredictionResult:
-    """Hồi quy về mức trung bình 10.5 trong 8 phiên (lỏng hơn AI11)."""
+    """Hồi quy về mức trung bình 10.5 trong 8 phiên."""
     if len(totals) < 8:
-        return {"du_doan": "Tài", "do_tin_cay": 57.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
         
     avg8 = statistics.mean(list(totals)[-8:])
     
-    if avg8 > 11.5:
+    if avg8 > 11.8:
         # Quá Tài -> dự đoán Xỉu
         return {"du_doan": "Xỉu", "do_tin_cay": 88.4}
-    if avg8 < 9.5:
+    if avg8 < 9.2:
         # Quá Xỉu -> dự đoán Tài
         return {"du_doan": "Tài", "do_tin_cay": 88.9}
             
@@ -832,7 +865,7 @@ def ai48_mean_reversion_8(history: deque, totals: deque, win_log: deque) -> Pred
 def ai49_stochastic_oscillator_10(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Dao động ngẫu nhiên (Stochastic) 10 phiên: Tỷ lệ Total cuối so với phạm vi min/max."""
     if len(totals) < 10:
-        return {"du_doan": "Xỉu", "do_tin_cay": 56.5}
+        return {"du_doan": history[-1] if history else "Xỉu", "do_tin_cay": 50.0}
             
     window = list(totals)[-10:]
     low = min(window)
@@ -857,17 +890,17 @@ def ai49_stochastic_oscillator_10(history: deque, totals: deque, win_log: deque)
 def ai50_perfect_sequence_3(history: deque, totals: deque, win_log: deque) -> PredictionResult:
     """Mẫu 3 phiên: TTT, XXX, TXT, XTX. Dự đoán duy trì/đảo chiều theo mẫu."""
     if len(history) < 3:
-        return {"du_doan": "Tài", "do_tin_cay": 55.0}
+        return {"du_doan": history[-1] if history else "Tài", "do_tin_cay": 50.0}
             
     seq = "".join("T" if h == "Tài" else "X" for h in list(history)[-3:])
     
-    if seq == "TTT": # Chuỗi Tài -> Dự đoán Tài tiếp
+    if seq == "TTT": # Chuỗi Tài -> Dự đoán Tài tiếp (ưu tiên xu hướng mạnh)
         return {"du_doan": "Tài", "do_tin_cay": 89.6}
-    if seq == "XXX": # Chuỗi Xỉu -> Dự đoán Xỉu tiếp
+    if seq == "XXX": # Chuỗi Xỉu -> Dự đoán Xỉu tiếp (ưu tiên xu hướng mạnh)
         return {"du_doan": "Xỉu", "do_tin_cay": 89.5}
-    if seq == "TXT": # Xen kẽ -> Dự đoán Xỉu tiếp
+    if seq == "TXT": # Xen kẽ -> Dự đoán Xỉu tiếp (ưu tiên hồi quy)
         return {"du_doan": "Xỉu", "do_tin_cay": 88.1}
-    if seq == "XTX": # Xen kẽ -> Dự đoán Tài tiếp
+    if seq == "XTX": # Xen kẽ -> Dự đoán Tài tiếp (ưu tiên hồi quy)
         return {"du_doan": "Tài", "do_tin_cay": 88.3}
             
     return {"du_doan": history[-1], "do_tin_cay": 71.7}
@@ -878,26 +911,22 @@ def ai50_perfect_sequence_3(history: deque, totals: deque, win_log: deque) -> Pr
 # =========================================================
 
 class TaiXiuPredictor:
-    """
-    Quản lý việc lấy dữ liệu Tài Xỉu, lưu trữ lịch sử và chạy 50 thuật toán VIP
-    để đưa ra dự đoán có độ tin cậy cao nhất.
-    """
+    """Quản lý dữ liệu lịch sử và thực thi tất cả các thuật toán dự đoán."""
     
     def __init__(self, api_url: str, app_id: str):
-        # Thông tin cấu hình
         self.api_url = api_url
-        self.app_id = app_id # Dùng để nhận dạng ứng dụng
+        self.app_id = app_id
+        
+        # Lịch sử dữ liệu (Tai/Xiu, Total, Win/Loss)
+        self.history: deque[str] = deque(maxlen=MAX_HISTORY_SIZE)
+        self.totals: deque[int] = deque(maxlen=MAX_HISTORY_SIZE)
+        self.win_log: deque[bool] = deque(maxlen=MAX_HISTORY_SIZE) # Ghi lại Win/Loss của dự đoán trước
         self.last_phien_id: Optional[int] = None
-        self.last_prediction_data: Optional[PredictionResult] = None
+        self.last_prediction_data: Optional[PredictionResult] = None # Lưu dự đoán của phiên trước để đánh giá
 
-        # Bộ nhớ lịch sử (deques tối ưu cho thêm/bớt từ hai đầu)
-        self.history = deque(maxlen=1000)    # Lưu kết quả Tài/Xỉu
-        self.totals = deque(maxlen=1000)      # Lưu tổng điểm
-        self.win_log = deque(maxlen=1000)    # Log kết quả dự đoán của phiên trước (True/False)
-
-        # Danh sách 50 thuật toán VIP được đăng ký
+        # Danh sách tất cả 50 thuật toán đã được định nghĩa
         self.algos: List[Callable] = [
-            # Khối 1: Xu Hướng & Động Lượng
+            # Khối 1: Xu hướng & Động lượng
             ai1_sma_crossover_5_10, ai2_rsi_analog_14, ai3_trend_slope_linear_6, 
             ai4_macd_signal_5_10, ai5_momentum_breakout_4, ai6_triple_trend_confirm, 
             ai7_mid_range_stability_8, ai8_volume_oscillator_5, ai9_exponential_ma_4, 
@@ -909,7 +938,7 @@ class TaiXiuPredictor:
             ai17_total_range_mid_reversion, ai18_anti_martingale_3, ai19_long_term_alternating_10, 
             ai20_oscillator_divergence_7,
             
-            # Khối 3: Nhận Dạng Mẫu Chuỗi
+            # Khối 3: Nhận Dạng Mẫu Chuỗi & Xu hướng
             ai21_1_2_3_pattern, ai22_double_alternating_6, ai23_ab_c_a_b_c_pattern, 
             ai24_long_term_alternating_7, ai25_short_mid_trend_confirm_5, ai26_z_score_deviation_10, 
             ai27_head_shoulder_analog_4, ai28_volatility_compression_6, ai29_momentum_indicator_8, 
@@ -917,7 +946,7 @@ class TaiXiuPredictor:
             
             # Khối 4: Biến Động & Ổn Định
             ai31_mid_range_stability_break, ai32_boundary_reversion_12, ai33_odd_streak_7, 
-            ai34_even_bias_short_4, ai35_parity_switch_8, 
+            ai34_even_bias_short_4, ai35_parity_switch_8,
             
             # Khối 5: Tổng Hợp & Chuyên Sâu
             ai36_algo_performance_switch, ai37_majority_vote_top_5, ai38_win_loss_balance_10, 
@@ -950,21 +979,23 @@ class TaiXiuPredictor:
                 newest = data["list"][0]
                 phien = int(newest.get("id"))
                 
-                # API Tele68: 'dices' có thể là chuỗi hoặc list.
+                # Xử lý dữ liệu xúc xắc (dices)
                 dices_raw = newest.get("dices", [])
                 if isinstance(dices_raw, str):
                     dice = [int(d) for d in dices_raw.split(',') if d.strip().isdigit()][:3]
-                else:
+                elif isinstance(dices_raw, list):
                     dice = [int(d) for d in dices_raw][:3]
+                else:
+                    dice = []
                     
                 # Tính lại tổng, đảm bảo dữ liệu chuẩn
                 tong = sum(dice) if len(dice) == 3 else newest.get("point", 0)
                 
                 # Chuẩn hóa kết quả (Tai/Xiu)
                 ketqua = ""
-                if tong >= 11 and tong <= 17:
+                if 11 <= tong <= 17:
                     ketqua = "Tài"
-                elif tong >= 4 and tong <= 10:
+                elif 4 <= tong <= 10:
                     ketqua = "Xỉu"
                 else:
                     ketqua = "Lỗi Dữ Liệu" 
@@ -974,9 +1005,11 @@ class TaiXiuPredictor:
                     return phien, dice, tong, ketqua
             
         except requests.exceptions.RequestException as e:
-            print(f"[❌] Lỗi lấy dữ liệu API {self.api_url}: {e}")
+            # print(f"[❌] Lỗi lấy dữ liệu API {self.api_url}: {e}")
+            pass
         except Exception as e:
-            print(f"[❌] Lỗi xử lý JSON hoặc logic: {e}")
+            # print(f"[❌] Lỗi xử lý JSON hoặc logic: {e}")
+            pass
             
         return None
 
@@ -986,12 +1019,13 @@ class TaiXiuPredictor:
         for algo in self.algos:
             try:
                 r = algo(self.history, self.totals, self.win_log)
-                # Đảm bảo độ tin cậy nằm trong [50, 100] để loại bỏ kết quả trung tính thấp
-                confidence = round(r["do_tin_cay"], 2)
+                # Đảm bảo độ tin cậy nằm trong [50, 100]
+                confidence = round(max(50.0, min(100.0, r["do_tin_cay"])), 2) 
+                
                 if confidence >= 50.0:
                     results.append((algo.__name__, r["du_doan"], confidence))
             except Exception as e:
-                # print(f"[⚠️] Lỗi {algo.__name__}: {e}")  
+                # print(f"[⚠️] Lỗi {algo.__name__}: {e}")
                 pass
 
         # Chọn ra thuật toán có độ tin cậy cao nhất (MAX CONFIDENCE)
@@ -1018,13 +1052,13 @@ class TaiXiuPredictor:
             phien, dice, tong, ketqua = data
             
             # 1. Phát hiện phiên mới (Nếu ID phiên mới hơn ID đã lưu)
-            if phien != self.last_phien_id and phien is not None:
+            if phien != self.last_phien_id and phien is not None and len(dice) == 3:
                 
                 # --- CHU TRÌNH 1: Đánh giá phiên VỪA KẾT THÚC ---
-                if self.last_phien_id is not None:
+                if self.last_phien_id is not None and self.last_prediction_data:
                     # Kiểm tra xem dự đoán cho phiên này có đúng với kết quả thực tế không
-                    if self.last_prediction_data and self.last_prediction_data["du_doan"] not in ["Đang khởi động...", "Đang phân tích"]:
-                        last_prediction = self.last_prediction_data["du_doan"]
+                    last_prediction = self.last_prediction_data.get("du_doan")
+                    if last_prediction not in ["Đang khởi động...", "Đang phân tích"]:
                         is_win = (last_prediction == ketqua)
                         self.win_log.append(is_win)
                 
@@ -1056,17 +1090,22 @@ class TaiXiuPredictor:
                 # Cập nhật ID phiên cuối cùng
                 self.last_phien_id = phien
                 
-                print(f"[✅] Phiên {phien} | 🎲 {dice} ({tong}) → {ketqua} | 🔮 {prediction_for_next['best_algo']} → {prediction_for_next['du_doan']} ({prediction_for_next['do_tin_cay']}%) | Win Log: {len(self.win_log)}")
+                # In ra log chi tiết
+                win_rate = (sum(1 for w in self.win_log if w) / len(self.win_log) * 100) if self.win_log else 0.0
+                print(f"[✅] Phiên {phien} | 🎲 {dice} ({tong}) → {ketqua} | 🔮 {prediction_for_next['best_algo']} → {prediction_for_next['du_doan']} ({prediction_for_next['do_tin_cay']}%) | Tỷ lệ thắng (Log): {win_rate:.2f}% ({len(self.win_log)}/30)")
             
-            # Nếu là cùng một phiên, cập nhật lại thời gian
+            # Nếu là cùng một phiên (chờ kết quả), cập nhật lại dữ liệu nhưng không thay đổi dự đoán
             elif self.last_phien_id == phien:
-                # Nếu không phải phiên mới, ta giữ nguyên dự đoán cho phiên tiếp theo
-                pass
+                # Cập nhật thông tin phiên hiện tại (nếu cần)
+                self.last_data.update({
+                    "phien": phien,
+                    "xucxac1": dice[0],
+                    "xucxac2": dice[1],
+                    "xucxac3": dice[2],
+                    "tong": tong,
+                    "ketqua": ketqua,
+                })
         
-        else:
-            # Không lấy được dữ liệu, in thông báo
-            pass
-            
         # Luôn trả về dữ liệu mới nhất (Phiên Vừa Ra và Dự Đoán cho Phiên Tiếp Theo)
         return self.last_data
 
@@ -1078,7 +1117,7 @@ class TaiXiuPredictor:
 # Khởi tạo đối tượng Predictor (sử dụng API Tele68 cho ví dụ)
 # VUI LÒNG THAY ĐỔI URL NÀY nếu muốn kết nối với API của LC hoặc nền tảng khác
 TELE68_API_URL = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
-APP_IDENTIFIER = "VIP_Quant_Analyzer"
+APP_IDENTIFIER = "VIP_Quant_Analyzer_V5"
 
 predictor = TaiXiuPredictor(
     api_url=TELE68_API_URL, 
