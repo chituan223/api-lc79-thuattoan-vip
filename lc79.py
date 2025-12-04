@@ -1,16 +1,12 @@
-# Ví dụ trong file lc79.py
-
 from flask import Flask
-app = Flask(__name__)
+# (Bạn có thể cân nhắc đổi tên file thành api.py hoặc index.py để tuân thủ quy ước chung)
 
-# Đây là cách bạn định nghĩa đường dẫn:
-@app.route('/taixiumd5', methods=['GET', 'POST'])
-def taixiu_md5():
-    # Logic xử lý của bạn ở đây
-    return "Đây là endpoint /taixiumd5"
+app = Flask(__name__) # <--- Vercel tìm thấy biến 'app' này
 
-# Hoặc bạn có thể thêm tiền tố (prefix) 'api' nếu muốn:
-@app.route('/api/taixiumd5', methods=['GET', 'POST'])
-def api_taixiu_md5():
-    # Logic xử lý khác
-    return "Đây là endpoint /api/taixiumd5"
+@app.route('/...')
+def my_api():
+    return '...'
+
+# KHÔNG cần dòng này khi deploy lên Vercel:
+# if __name__ == '__main__':
+#     app.run()
