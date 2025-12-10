@@ -30,8 +30,8 @@ latest_data = {
     "Xúc xắc 2": None,
     "Xúc xắc 3": None,
     "Tổng": None,
-    "Dự đoán": "Đang chờ", 
-    "Độ tin cậy": 0.0,      
+    "Du_doan": "Đang chờ", 
+    "do_tin_cay": 0.0,      
     "ID": "tuananh"
 }
 
