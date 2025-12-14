@@ -4,418 +4,387 @@ import threading
 from flask import Flask, jsonify
 from datetime import datetime
 import math
+from collections import Counter
 
-# ===============================
-# CẤU HÌNH
-# ===============================
+# Thông tin API và Bot
 API_URL = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
 last_processed_session_id = None
-
 app = Flask(__name__)
 
-# ===============================
-# BIẾN LƯU DỮ LIỆU
-# ===============================
+# Dữ liệu hiện tại của Bot
 latest_data = {
     "Phiên": None,
     "Xúc xắc 1": None,
     "Xúc xắc 2": None,
     "Xúc xắc 3": None,
     "Tổng": None,
-    "Dự đoán": "Đang chờ", 
+    "Kết quả": None,
+    "Pattern": "",
+    "Dự đoán": "Đang chờ",
     "Độ tin cậy": 0,
+    "Tình trạng cầu": "Đang phân tích",
+    "Lịch sử Win/Loss": {},
     "ID": "tuananh"
 }
 
-history_full = []
-dice_history = []
-sum_history = []
-
-# Lưu trữ lịch sử dự đoán và kết quả
-prediction_history = []  # [(dự_đoán, kết_quả_thực_tế, độ_tin_cậy, phiên)]
+# Lịch sử và thống kê toàn cục
+history_full = [] # Lịch sử kết quả (1=Tài, 0=Xỉu)
+dice_history = [] # Lịch sử 3 viên xúc xắc
+sum_history = [] # Lịch sử tổng điểm
+prediction_history = [] # Lịch sử các lần dự đoán (pred_text, is_win, conf, phien)
 win_count = 0
 loss_count = 0
-last_prediction = None  # Lưu dự đoán của phiên trước
+last_prediction = None # (pred_text, pred_conf, pred_phien)
+
+def get_pattern_string(history, length=30):
+    """Tạo chuỗi pattern T/X từ lịch sử"""
+    if not history:
+        return ""
+    recent = history[-length:] if len(history) >= length else history
+    return ''.join(['T' if x == 1 else 'X' for x in recent])
 
 # ===============================
-# 5 THUẬT TOÁN CHUẨN - LOGIC THẬT
+# ĐÁNH GIÁ TÌNH TRẠNG CẦU (BỎ ĐIỂM CẦU)
 # ===============================
-
-def algorithm_1_mean_reversion(history):
-    """
-    Thuật toán 1: Mean Reversion (Hồi quy trung bình)
-    Logic: Khi tỷ lệ lệch xa 50%, xu hướng sẽ quay về trung bình
-    """
-    if len(history) < 5:
-        return 1, 55.0, "Khởi động"
+def evaluate_bridge_status():
+    """Đánh giá tình trạng cầu dựa trên độ ổn định và tỷ lệ thắng gần đây"""
+    global history_full, prediction_history
     
-    window = min(len(history), 20)
-    recent = history[-window:]
+    if len(history_full) < 20:
+        return "Đang thu thập dữ liệu (Yêu cầu >20 phiên)"
     
-    tai_count = sum(recent)
-    tai_ratio = tai_count / len(recent)
+    # 1. Tỷ lệ Win gần đây (trọng số cao)
+    recent_preds = prediction_history[-20:]
+    win_rate = 0.5
+    if recent_preds:
+        recent_wins = sum(1 for _, is_win, _, _ in recent_preds if is_win)
+        win_rate = recent_wins / len(recent_preds)
     
-    # Tính z-score để đo độ lệch
-    expected = len(recent) * 0.5
-    std_dev = math.sqrt(len(recent) * 0.5 * 0.5)
-    z_score = (tai_count - expected) / std_dev if std_dev > 0 else 0
+    # 2. Độ ổn định của cầu (Volatility Score)
+    recent_20 = history_full[-20:]
+    changes = sum(1 for i in range(1, len(recent_20)) if recent_20[i] != recent_20[i-1])
+    volatility_score = 1 - (changes / (len(recent_20) - 1)) # 1 là ổn định nhất (dây dài, ít nhảy)
     
-    # Confidence tăng theo độ lệch
-    confidence = 60 + min(abs(z_score) * 15, 30)
-    
-    # Dự đoán ngược lại khi lệch
-    if z_score > 0.8:  # Quá nhiều Tài
-        prediction = 0
-        reason = f"Mean Reversion: {window}v có {tai_count}T ({tai_ratio:.1%}). Z-score={z_score:.2f} cao → Dự đoán XỈU"
-    elif z_score < -0.8:  # Quá nhiều Xỉu
-        prediction = 1
-        reason = f"Mean Reversion: {window}v có {tai_count}T ({tai_ratio:.1%}). Z-score={z_score:.2f} thấp → Dự đoán TÀI"
+    # Đánh giá cuối cùng dựa trên Win Rate và Volatility
+    if win_rate >= 0.80:
+        if volatility_score > 0.7:
+             return "cầu đẹp rủi ro thấp 🌠"
+        else:
+             return "cầu ổn cân nhắc ⚡"
+    elif win_rate >= 0.65:
+        return "cầu bịp không nên vào 🤮"
+    elif win_rate >= 0.50:
+        return "cầu lỏ"
     else:
-        # Xu hướng nhẹ
-        prediction = 0 if tai_ratio > 0.55 else 1
-        confidence -= 5
-        reason = f"Mean Reversion: {window}v có {tai_count}T ({tai_ratio:.1%}). Z-score={z_score:.2f} trung tính"
+        return " cầu lồn không nên vào ⚠️"
+
+# ===============================
+# 5 THUẬT TOÁN SOI CẦU CHUẨN ĐÃ LÀM LẠI
+# ===============================
+
+def algo_1_super_pattern(history):
+    """Thuật toán 1: Super Pattern - Soi cầu dựa trên pattern 2-3-4-5 bước (Trọng số cao)"""
+    if len(history) < 15:
+        return history[-1] if history else 1, 55.0, "Init"
     
-    return prediction, round(confidence, 1), reason
+    votes = {'T': 0, 'X': 0}
+    
+    # Soi pattern 5, 4, 3, 2 bước
+    for length, weight in [(5, 6), (4, 4), (3, 3), (2, 2)]:
+        if len(history) >= length + 2:
+            p = tuple(history[-length:])
+            # Tìm các mẫu khớp và kết quả tiếp theo
+            matches = [history[i+length] for i in range(len(history) - length - 1) if tuple(history[i:i+length]) == p]
+            
+            # Chỉ tính nếu có từ 3 mẫu khớp trở lên
+            if len(matches) >= 3:
+                t = sum(matches)
+                x = len(matches) - t
+                total_matches = len(matches)
+                
+                # Tính độ tin cậy của vote này
+                conf_factor = abs(t - x) / total_matches # Độ chênh lệch
+                
+                if t > x:
+                    # Tăng vote và scale theo số lượng mẫu
+                    votes['T'] += weight * conf_factor * (total_matches / 3) 
+                else:
+                    votes['X'] += weight * conf_factor * (total_matches / 3)
+    
+    total_vote_score = votes['T'] + votes['X']
+    
+    if total_vote_score == 0:
+        # Nếu không có mẫu nào đủ tin cậy, follow ván trước (55%)
+        return history[-1], 55, "Pattern vote: Không tìm thấy mẫu đủ tin cậy"
+        
+    if votes['T'] > votes['X']:
+        # Base confidence 60 + bonus from vote ratio
+        conf = 60 + min(35, (votes['T'] / total_vote_score) * 40)
+        return 1, round(conf, 1), f"Pattern vote: T={votes['T']:.1f} X={votes['X']:.1f}"
+    elif votes['X'] > votes['T']:
+        conf = 60 + min(35, (votes['X'] / total_vote_score) * 40)
+        return 0, round(conf, 1), f"Pattern vote: T={votes['T']:.1f} X={votes['X']:.1f}"
+    else:
+        return history[-1], 55, "Pattern vote: Cân bằng"
 
 
-def algorithm_2_streak_probability(history):
-    """
-    Thuật toán 2: Streak Probability (Xác suất chuỗi)
-    Logic: Chuỗi càng dài, xác suất tiếp tục giảm theo hàm mũ
-    """
-    if len(history) < 3:
-        return 0, 56.0, "Khởi động"
+def algo_2_chain_analysis(history):
+    """Thuật toán 2: Chain Analysis - Phân tích chuỗi Markov 2 bước"""
+    if len(history) < 15:
+        return history[-1] if history else 0, 60.0, "Init"
     
-    current = history[-1]
-    streak_length = 1
+    # Ma trận chuyển 2 bước
+    trans = {}
+    for i in range(len(history) - 2):
+        state = (history[i], history[i+1])
+        next_v = history[i+2]
+        if state not in trans:
+            trans[state] = {'T': 0, 'X': 0}
+        if next_v == 1:
+            trans[state]['T'] += 1
+        else:
+            trans[state]['X'] += 1
     
-    # Đếm chuỗi liên tiếp
-    for i in range(len(history) - 2, -1, -1):
-        if history[i] == current:
-            streak_length += 1
+    curr_state = tuple(history[-2:])
+    
+    if curr_state in trans:
+        t = trans[curr_state]['T']
+        x = trans[curr_state]['X']
+        total = t + x
+        
+        # Yêu cầu ít nhất 3 mẫu để đưa ra dự đoán mạnh
+        if total >= 3:
+            if t > x:
+                # Scale confidence more aggressively
+                return 1, min(65 + (t - x) / total * 50, 93), f"Chain: {curr_state} → T={t} X={x}"
+            else:
+                return 0, min(65 + (x - t) / total * 50, 93), f"Chain: {curr_state} → T={t} X={x}"
+    
+    # Fallback Chain 1 bước
+    trans_1 = {'T': {'T': 0, 'X': 0}, 'X': {'T': 0, 'X': 0}}
+    for i in range(len(history) - 1):
+        curr = 'T' if history[i] == 1 else 'X'
+        next_v = 'T' if history[i+1] == 1 else 'X'
+        trans_1[curr][next_v] += 1
+    
+    curr = 'T' if history[-1] == 1 else 'X'
+    t = trans_1[curr]['T']
+    x = trans_1[curr]['X']
+    
+    if t + x >= 5: # Yêu cầu 5 mẫu cho Chain 1
+        return (1 if t > x else 0), min(60 + abs(t - x) * 3, 85), f"Chain-1: {curr} → T={t} X={x}"
+    
+    return history[-1], 58, "Chain yếu/không đủ mẫu"
+
+
+def algo_3_wave_trend(history):
+    """Thuật toán 3: Wave Trend - Soi xu hướng sóng (dựa trên MA)"""
+    if len(history) < 15:
+        return history[-1] if history else 1, 60.0, "Init"
+    
+    r3 = sum(history[-3:]) / 3
+    r5 = sum(history[-5:]) / 5
+    r8 = sum(history[-8:]) / 8
+    r12 = sum(history[-12:]) / 12
+    
+    # Xu hướng ngắn hạn (Tốc độ thay đổi)
+    short_trend = r3 - r5
+    
+    curr = history[-1]
+    
+    # 1. Cực đoan (Reverse) - Trọng số cao
+    if r3 >= 1.0: # 3 ván đều Tài
+        return 0, 90, f"3 ván toàn Tài ({r3:.0%}) → Soi XỈU mạnh"
+    elif r3 <= 0.0: # 3 ván đều Xỉu
+        return 1, 90, f"3 ván toàn Xỉu ({1-r3:.0%}) → Soi TÀI mạnh"
+    
+    # 2. Trend cùng chiều mạnh → Follow
+    if short_trend > 0.3 and r5 > 0.7:
+        return 1, min(75 + short_trend * 30, 92), f"Sóng Tài tăng mạnh (ST={short_trend:.2f}) → Soi TÀI"
+    elif short_trend < -0.3 and r5 < 0.3:
+        return 0, min(75 - short_trend * 30, 92), f"Sóng Xỉu giảm mạnh (ST={short_trend:.2f}) → Soi XỈU"
+    
+    # 3. Đảo chiều sau trend dài
+    if r8 > 0.7 and short_trend < -0.2:
+        return 0, 80, f"Sau trend Tài dài (R8>0.7), đảo chiều ngắn hạn → Soi XỈU"
+    elif r8 < 0.3 and short_trend > 0.2:
+        return 1, 80, f"Sau trend Xỉu dài (R8<0.3), đảo chiều ngắn hạn → Soi TÀI"
+    
+    # 4. Follow hiện tại nếu trend yếu
+    return curr, 65, f"Sóng yếu → Follow {curr}"
+
+
+def algo_4_streak_master(history):
+    """Thuật toán 4: Streak Master - Bậc thầy soi chuỗi"""
+    if len(history) < 10:
+        return history[-1] if history else 0, 60.0, "Init"
+    
+    curr = history[-1]
+    streak = 1
+    for i in range(len(history)-2, -1, -1):
+        if history[i] == curr:
+            streak += 1
         else:
             break
     
-    # Xác suất tiếp tục chuỗi giảm theo 0.5^streak
-    continue_prob = 0.5 ** streak_length
-    break_prob = 1 - continue_prob
-    
-    # Confidence tăng theo độ dài chuỗi
-    confidence = 55 + min(streak_length * 8, 35)
-    
-    if streak_length >= 4:
-        prediction = 1 - current
-        confidence = min(confidence + 10, 92)
-        result = "TÀI" if prediction == 1 else "XỈU"
-        curr_name = "TÀI" if current == 1 else "XỈU"
-        reason = f"Streak: Chuỗi {streak_length} {curr_name}. P(tiếp tục)={continue_prob:.1%}, P(phá)={break_prob:.1%} → {result}"
-    elif streak_length == 3:
-        prediction = 1 - current
-        result = "TÀI" if prediction == 1 else "XỈU"
-        curr_name = "TÀI" if current == 1 else "XỈU"
-        reason = f"Streak: Chuỗi 3 {curr_name}. P(tiếp tục)={continue_prob:.1%} → Có thể phá {result}"
-    else:
-        prediction = current
-        result = "TÀI" if prediction == 1 else "XỈU"
-        curr_name = "TÀI" if current == 1 else "XỈU"
-        reason = f"Streak: Chuỗi ngắn {streak_length} {curr_name}. → Có thể tiếp tục {result}"
-    
-    return prediction, round(confidence, 1), reason
-
-
-def algorithm_3_conditional_probability(history):
-    """
-    Thuật toán 3: Conditional Probability (Xác suất có điều kiện)
-    Logic: P(next|current state) dựa trên lịch sử chuyển trạng thái
-    """
-    if len(history) < 8:
-        return 1, 57.0, "Khởi động"
-    
-    # Ma trận chuyển tiếp
-    transitions = {
-        'T->T': 0, 'T->X': 0,
-        'X->T': 0, 'X->X': 0
-    }
-    
-    for i in range(len(history) - 1):
-        curr_state = 'T' if history[i] == 1 else 'X'
-        next_state = 'T' if history[i + 1] == 1 else 'X'
-        key = f"{curr_state}->{next_state}"
-        transitions[key] += 1
-    
-    current = history[-1]
-    current_name = 'T' if current == 1 else 'X'
-    
-    if current == 1:  # Hiện tại là Tài
-        total = transitions['T->T'] + transitions['T->X']
-        if total > 0:
-            prob_tai = transitions['T->T'] / total
-            prob_xiu = transitions['T->X'] / total
+    # Phân tích lịch sử chuỗi
+    all_streaks = []
+    temp = 1
+    for i in range(1, len(history)):
+        if history[i] == history[i-1]:
+            temp += 1
         else:
-            prob_tai = prob_xiu = 0.5
-    else:  # Hiện tại là Xỉu
-        total = transitions['X->T'] + transitions['X->X']
-        if total > 0:
-            prob_tai = transitions['X->T'] / total
-            prob_xiu = transitions['X->X'] / total
-        else:
-            prob_tai = prob_xiu = 0.5
+            all_streaks.append(temp)
+            temp = 1
+    all_streaks.append(temp) # Chuỗi cuối cùng
     
-    # Confidence dựa trên độ chắc chắn
-    confidence = 58 + abs(prob_tai - prob_xiu) * 60
-    confidence = min(confidence, 88)
+    if not all_streaks:
+        return history[-1], 60, "No streak data"
     
-    prediction = 1 if prob_tai > prob_xiu else 0
-    result = "TÀI" if prediction == 1 else "XỈU"
+    avg_streak = sum(all_streaks) / len(all_streaks)
+    max_streak = max(all_streaks)
     
-    reason = f"Conditional: Từ {current_name} → P(T)={prob_tai:.1%}, P(X)={prob_xiu:.1%}. Ma trận: {transitions} → {result}"
+    curr_name = "TÀI" if curr == 1 else "XỈU"
+    opposite = 1 - curr
     
-    return prediction, round(confidence, 1), reason
+    # LOGIC SOI CHUỖI:
+    if streak >= 6:  # Chuỗi rất dài
+        return opposite, min(80 + streak * 3, 95), f"Chuỗi {streak} {curr_name} quá dài → Soi đảo chiều"
+    
+    elif streak >= max_streak and max_streak >= 3:  # Đạt max lịch sử
+        return opposite, min(75 + (streak - max_streak + 1) * 5, 90), f"Chuỗi {streak} đạt max {max_streak} → Soi phá chuỗi"
+    
+    elif streak >= avg_streak * 2 and avg_streak >= 2:  # Gấp đôi TB
+        return opposite, min(70 + (streak - avg_streak) * 4, 88), f"Chuỗi {streak} >> TB {avg_streak:.1f} → Soi phá"
+    
+    elif streak <= 2:  # Chuỗi ngắn → Follow
+        return curr, 70, f"Chuỗi {streak} {curr_name} ngắn → Soi tiếp tục"
+    
+    else:  # Chuỗi trung bình → Follow
+        return curr, 65, f"Chuỗi {streak} {curr_name} TB → Soi tiếp tục"
 
 
-def algorithm_4_moving_average_crossover(history):
-    """
-    Thuật toán 4: Moving Average Crossover
-    Logic: So sánh MA ngắn hạn vs dài hạn để xác định xu hướng
-    """
-    if len(history) < 12:
-        return 0, 58.0, "Khởi động"
+def algo_5_dice_pro(dice_hist, sum_hist):
+    """Thuật toán 5: Dice Pro - Chuyên gia soi xúc xắc và tổng điểm"""
+    if len(sum_hist) < 10:
+        return 1, 60.0, "Init"
     
-    # MA ngắn (5 ván) vs MA dài (10 ván)
-    ma_short = sum(history[-5:]) / 5
-    ma_long = sum(history[-10:]) / 10
+    recent_10 = sum_hist[-10:]
+    mean = sum(recent_10) / 10
     
-    # Tính momentum
-    momentum = ma_short - ma_long
+    # 1. Trend tổng điểm (dựa trên 3 ván gần nhất vs 3 ván trước đó)
+    near_sum = sum(recent_10[-3:]) / 3
+    far_sum = sum(recent_10[-6:-3]) / 3
+    trend = near_sum - far_sum
     
-    # Tính độ lệch so với 0.5
-    deviation_short = abs(ma_short - 0.5)
-    deviation_long = abs(ma_long - 0.5)
-    
-    # Confidence tăng khi có xu hướng rõ
-    confidence = 60 + abs(momentum) * 100 + (deviation_short + deviation_long) * 20
-    confidence = min(confidence, 87)
-    
-    # Quyết định dựa trên crossover và mean reversion
-    if momentum > 0.15:  # MA ngắn cao hơn nhiều
-        prediction = 0  # Đảo chiều xuống
-        reason = f"MA Crossover: MA5={ma_short:.2f}, MA10={ma_long:.2f}. Momentum={momentum:.3f} (cao) → Điều chỉnh XỈU"
-    elif momentum < -0.15:  # MA ngắn thấp hơn nhiều
-        prediction = 1  # Đảo chiều lên
-        reason = f"MA Crossover: MA5={ma_short:.2f}, MA10={ma_long:.2f}. Momentum={momentum:.3f} (thấp) → Điều chỉnh TÀI"
+    # 2. Phân phối số xúc xắc
+    if len(dice_hist) >= 6:
+        nums = [n for d in dice_hist[-6:] for n in d]
+        high = sum(1 for n in nums if n >= 4)
+        low = len(nums) - high
+        high_rate = high / len(nums)
     else:
-        # Momentum yếu, dựa vào mean reversion
-        if ma_short > 0.55:
-            prediction = 0
-            reason = f"MA Crossover: MA5={ma_short:.2f} cao → XỈU"
-        elif ma_short < 0.45:
-            prediction = 1
-            reason = f"MA Crossover: MA5={ma_short:.2f} thấp → TÀI"
-        else:
-            prediction = 1 - history[-1]
-            confidence -= 8
-            reason = f"MA Crossover: MA5={ma_short:.2f} trung tính → Đảo chiều"
+        high_rate = 0.5
     
-    return prediction, round(confidence, 1), reason
-
-
-def algorithm_5_dice_statistical_analysis(dice_hist, sum_hist):
-    """
-    Thuật toán 5: Dice Statistical Analysis
-    Logic: Phân tích thống kê chi tiết từng viên xúc xắc và tổng điểm
-    """
-    if len(sum_hist) < 5:
-        return 1, 59.0, "Khởi động"
+    # LOGIC SOI DICE:
+    # 1. Mean cực đoan (Reverse) - Trọng số cao
+    if mean >= 14.0:
+        return 0, min(85 + (mean - 14.0) * 5, 95), f"Điểm TB {mean:.1f} cực cao → Soi XỈU"
+    elif mean <= 7.0:
+        return 1, min(85 + (7.0 - mean) * 5, 95), f"Điểm TB {mean:.1f} cực thấp → Soi TÀI"
     
-    window = min(len(sum_hist), 10)
-    recent_sums = sum_hist[-window:]
+    # 2. Trend mạnh
+    if trend >= 2.0:
+        return 1, min(75 + trend * 5, 90), f"Trend điểm +{trend:.1f} mạnh → Soi TÀI"
+    elif trend <= -2.0:
+        return 0, min(75 - trend * 5, 90), f"Trend điểm {trend:.1f} mạnh → Soi XỈU"
     
-    # Tính các chỉ số thống kê
-    mean_sum = sum(recent_sums) / len(recent_sums)
-    variance = sum((x - mean_sum) ** 2 for x in recent_sums) / len(recent_sums)
-    std_dev = math.sqrt(variance)
+    # 3. Phân phối lệch
+    if high_rate >= 0.75:
+        return 1, min(70 + (high_rate - 0.75) * 80, 88), f"Số cao {high_rate:.0%} vượt trội → Soi TÀI"
+    elif high_rate <= 0.25:
+        return 0, min(70 + (0.25 - high_rate) * 80, 88), f"Số thấp {1-high_rate:.0%} vượt trội → Soi XỈU"
     
-    # Z-score cho tổng điểm (kỳ vọng = 10.5)
-    expected_mean = 10.5
-    z_score = (mean_sum - expected_mean) / (std_dev + 0.1)
-    
-    # Phân tích phân phối số
-    if len(dice_hist) >= 5:
-        recent_dice = dice_hist[-5:]
-        all_numbers = []
-        for dice_set in recent_dice:
-            all_numbers.extend(dice_set)
+    # 4. Trung tính
+    if mean > 11.5:
+        return 0, 65, f"Mean {mean:.1f} hơi cao"
+    elif mean < 9.5:
+        return 1, 65, f"Mean {mean:.1f} hơi thấp"
         
-        # Đếm tần suất từng số
-        freq = {i: all_numbers.count(i) for i in range(1, 7)}
-        high_count = sum(freq.get(i, 0) for i in [4, 5, 6])
-        low_count = sum(freq.get(i, 0) for i in [1, 2, 3])
-        
-        # Chi-square test để kiểm tra độ lệch
-        expected_freq = len(all_numbers) / 6
-        chi_square = sum((freq[i] - expected_freq) ** 2 / expected_freq for i in range(1, 7))
-        
-        # Tính expected sum dựa trên phân phối
-        expected_next = sum(i * freq[i] for i in range(1, 7)) / len(all_numbers) * 3
-    else:
-        freq = {}
-        chi_square = 0
-        expected_next = mean_sum
-        high_count = low_count = 0
-    
-    # Confidence dựa trên độ lệch và biến động
-    confidence = 62 + min(abs(z_score) * 12, 25) + min(chi_square, 10)
-    confidence = min(confidence, 89)
-    
-    # Quyết định đa yếu tố
-    factors_tai = 0
-    factors_xiu = 0
-    
-    # Yếu tố 1: Mean reversion
-    if mean_sum > 11.5:
-        factors_xiu += 3
-    elif mean_sum < 9.5:
-        factors_tai += 3
-    elif mean_sum > 10.5:
-        factors_xiu += 1
-    else:
-        factors_tai += 1
-    
-    # Yếu tố 2: Expected next sum
-    if expected_next > 11:
-        factors_xiu += 2
-    elif expected_next < 10:
-        factors_tai += 2
-    
-    # Yếu tố 3: Phân phối số
-    if high_count > low_count * 1.3:
-        factors_xiu += 2  # Nhiều số cao, có thể điều chỉnh
-    elif low_count > high_count * 1.3:
-        factors_tai += 2
-    
-    # Yếu tố 4: Xu hướng gần đây
-    if len(recent_sums) >= 3:
-        recent_trend = recent_sums[-1] - recent_sums[-3]
-        if recent_trend > 2:
-            factors_xiu += 1
-        elif recent_trend < -2:
-            factors_tai += 1
-    
-    # Quyết định cuối
-    if factors_tai > factors_xiu:
-        prediction = 1
-        reason = f"Dice Stats: Mean={mean_sum:.2f}, StdDev={std_dev:.2f}, Z={z_score:.2f}, Chi²={chi_square:.1f}, Next={expected_next:.1f}. Factors: T({factors_tai})>X({factors_xiu}) → TÀI"
-    else:
-        prediction = 0
-        reason = f"Dice Stats: Mean={mean_sum:.2f}, StdDev={std_dev:.2f}, Z={z_score:.2f}, Chi²={chi_square:.1f}, Next={expected_next:.1f}. Factors: X({factors_xiu})>T({factors_tai}) → XỈU"
-    
-    return prediction, round(confidence, 1), reason
+    return (1 if history_full[-1] == 1 else 0), 60, f"Dice trung tính → Follow"
 
 
 # ===============================
-# TỔNG HỢP DỰ ĐOÁN
+# TỔNG HỢP & QUYẾT ĐỊNH CUỐI CÙNG
 # ===============================
 def calculate_prediction():
+    """Tổng hợp 5 thuật toán bằng phương pháp voting trọng số"""
     global history_full, dice_history, sum_history
     
-    if len(history_full) < 3:
+    if len(history_full) < 5:
         return "TÀI", 50.0
     
-    results = []
-    weights = []
-    
-    # Chạy 5 thuật toán
     algos = [
-        algorithm_1_mean_reversion(history_full),
-        algorithm_2_streak_probability(history_full),
-        algorithm_3_conditional_probability(history_full),
-        algorithm_4_moving_average_crossover(history_full),
-        algorithm_5_dice_statistical_analysis(dice_history, sum_history)
+        algo_1_super_pattern(history_full),
+        algo_2_chain_analysis(history_full),
+        algo_3_wave_trend(history_full),
+        algo_4_streak_master(history_full),
+        algo_5_dice_pro(dice_history, sum_history)
     ]
     
-    for pred, conf, _ in algos:
-        results.append(pred)
-        weights.append(conf)
+    # Trọng số dựa trên độ tin cậy
+    tai = sum(conf for pred, conf, _ in algos if pred == 1)
+    xiu = sum(conf for pred, conf, _ in algos if pred == 0)
+    total = tai + xiu
     
-    # Tính điểm có trọng số
-    tai_score = sum(w for r, w in zip(results, weights) if r == 1)
-    xiu_score = sum(w for r, w in zip(results, weights) if r == 0)
-    
-    total = tai_score + xiu_score
     if total == 0:
         return "TÀI", 50.0
-    
-    if tai_score > xiu_score:
-        final = "TÀI"
-        conf = (tai_score / total) * 100
+
+    if tai > xiu:
+        # Giới hạn độ tin cậy để tránh quá ảo
+        return "TÀI", min(round((tai / total) * 100, 1), 96)
     else:
-        final = "XỈU"
-        conf = (xiu_score / total) * 100
-    
-    conf = max(55, min(conf, 92))
-    
-    return final, round(conf, 1)
+        return "XỈU", min(round((xiu / total) * 100, 1), 96)
 
 
 def get_win_loss_stats():
-    """Tính toán thống kê Win/Loss"""
+    """Tính toán thống kê Win/Loss gần nhất và tổng thể"""
     global win_count, loss_count, prediction_history
     
-    if win_count + loss_count == 0:
-        return {
-            "Tổng dự đoán": 0,
-            "Win": 0,
-            "Loss": 0,
-            "Tỷ lệ Win": "0%",
-            "Chuỗi hiện tại": "Chưa có dữ liệu"
-        }
-    
     total = win_count + loss_count
+    if total == 0:
+        return {"Tổng": 0, "Win": 0, "Loss": 0, "Tỷ lệ Win": "0%", "Chuỗi": "Chưa có"}
+    
     win_rate = (win_count / total) * 100
     
-    # Tính chuỗi hiện tại
-    current_streak = 0
+    streak = 0
     streak_type = None
     
-    if len(prediction_history) > 0:
-        last_result = prediction_history[-1][1]  # True = Win, False = Loss
-        streak_type = "Win" if last_result else "Loss"
+    if prediction_history:
+        # Lấy kết quả của lần dự đoán thành công/thất bại cuối cùng
+        last_is_win = prediction_history[-1][1] 
+        streak_type = "Win" if last_is_win else "Loss"
         
         for i in range(len(prediction_history) - 1, -1, -1):
-            if prediction_history[i][1] == last_result:
-                current_streak += 1
+            if prediction_history[i][1] == last_is_win:
+                streak += 1
             else:
                 break
     
-    streak_text = f"{current_streak} {streak_type} liên tiếp" if streak_type else "Chưa có"
-    
-    # Lấy 10 kết quả gần nhất
-    recent_10 = []
-    for i in range(min(10, len(prediction_history))):
-        idx = len(prediction_history) - 1 - i
-        pred, result, conf, phien = prediction_history[idx]
-        recent_10.append({
-            "Phiên": phien,
-            "Dự đoán": pred,
-            "Kết quả": "Win ✓" if result else "Loss ✗",
-            "Độ tin cậy": conf
-        })
-    
     return {
-        "Tổng dự đoán": total,
+        "Tổng": total,
         "Win": win_count,
         "Loss": loss_count,
         "Tỷ lệ Win": f"{win_rate:.1f}%",
-        "Chuỗi hiện tại": streak_text,
-        "10 kết quả gần nhất": recent_10
+        "Chuỗi": f"{streak} {streak_type}" if streak_type else "Chưa có"
     }
 
 
 # ===============================
-# BOT THU THẬP DỮ LIỆU
+# BOT CORE
 # ===============================
 def fetch_loop():
+    """Vòng lặp chính để lấy dữ liệu, phân tích và dự đoán"""
     global last_processed_session_id, latest_data
     global history_full, dice_history, sum_history
     global win_count, loss_count, prediction_history, last_prediction
@@ -423,6 +392,7 @@ def fetch_loop():
     while True:
         try:
             res = requests.get(API_URL, timeout=10)
+            res.raise_for_status() # Báo lỗi nếu status code không phải 200
             data = res.json()
             
             if not data.get("list"):
@@ -432,6 +402,7 @@ def fetch_loop():
             phien = data["list"][0]
             phien_id = phien.get("id")
             
+            # Chỉ xử lý nếu có phiên mới
             if phien_id == last_processed_session_id:
                 time.sleep(2)
                 continue
@@ -440,57 +411,59 @@ def fetch_loop():
             tong = phien.get("point")
             d1, d2, d3 = dices
             
+            # 1. Tính toán kết quả
+            # Tài (T) = 1 (11-17), Xỉu (X) = 0 (4-10)
             ket_qua = 1 if tong >= 11 else 0
             ket_qua_text = "TÀI" if ket_qua == 1 else "XỈU"
             
-            # Kiểm tra dự đoán trước đó
-            if last_prediction is not None:
+            # 2. Xử lý dự đoán cũ (nếu có)
+            if last_prediction:
                 pred_text, pred_conf, pred_phien = last_prediction
-                
-                # So sánh dự đoán với kết quả thực tế
-                is_win = pred_text == ket_qua_text
-                
-                if is_win:
-                    win_count += 1
-                    result_icon = "✓ WIN"
-                else:
-                    loss_count += 1
-                    result_icon = "✗ LOSS"
-                
-                # Lưu vào lịch sử
-                prediction_history.append((pred_text, is_win, pred_conf, pred_phien))
-                
-                # Giới hạn lịch sử 100 phiên
-                if len(prediction_history) > 100:
-                    prediction_history.pop(0)
-                
-                print(f"    └─ Kết quả dự đoán phiên #{pred_phien}: {result_icon} (Dự đoán: {pred_text}, Thực tế: {ket_qua_text})")
+                # Kiểm tra nếu phiên hiện tại là phiên tiếp theo của phiên dự đoán
+                if str(int(phien_id) - 1) == pred_phien:
+                    is_win = pred_text == ket_qua_text
+                    
+                    if is_win:
+                        win_count += 1
+                        icon = "✓"
+                    else:
+                        loss_count += 1
+                        icon = "✗"
+                    
+                    prediction_history.append((pred_text, is_win, pred_conf, pred_phien))
+                    if len(prediction_history) > 200:
+                        prediction_history.pop(0)
+                    
+                    wr = (win_count / (win_count + loss_count)) * 100
+                    print(f"  └─ {icon} Soi {pred_text} | KQ {ket_qua_text} | W:{win_count} L:{loss_count} ({wr:.1f}%)")
             
-            # Lưu lịch sử
+            # 3. Cập nhật lịch sử
             history_full.append(ket_qua)
-            if len(history_full) > 100:
-                history_full.pop(0)
+            if len(history_full) > 200: history_full.pop(0)
             
             dice_history.append([d1, d2, d3])
-            if len(dice_history) > 50:
-                dice_history.pop(0)
+            if len(dice_history) > 100: dice_history.pop(0)
             
             sum_history.append(tong)
-            if len(sum_history) > 50:
-                sum_history.pop(0)
+            if len(sum_history) > 100: sum_history.pop(0)
             
             last_processed_session_id = phien_id
             
-            # Tính dự đoán cho phiên TIẾP THEO
+            # 4. Tạo Pattern
+            pattern_str = get_pattern_string(history_full, 30)
+            
+            # 5. Dự đoán phiên tiếp theo
             pred, conf = calculate_prediction()
+            # Lưu dự đoán cho phiên hiện tại (dự đoán cho phiên ID + 1)
+            last_prediction = (pred, conf, phien_id) 
             
-            # Lưu dự đoán này để kiểm tra ở phiên sau
-            last_prediction = (pred, conf, phien_id)
+            # 6. Đánh giá Tình trạng cầu
+            bridge_status = evaluate_bridge_status()
             
-            # Lấy thống kê Win/Loss
+            # 7. Thống kê
             stats = get_win_loss_stats()
             
-            # Cập nhật
+            # 8. Cập nhật dữ liệu trả về API
             latest_data = {
                 "Phiên": phien_id,
                 "Xúc xắc 1": d1,
@@ -498,46 +471,37 @@ def fetch_loop():
                 "Xúc xắc 3": d3,
                 "Tổng": tong,
                 "Kết quả": ket_qua_text,
-                "Dự đoán phiên tiếp theo": pred,
+                "Pattern": pattern_str,
+                "Dự đoán": pred,
                 "Độ tin cậy": conf,
-                "Đã phân tích": len(history_full),
+                "Tình trạng cầu": bridge_status,
                 "Lịch sử Win/Loss": stats,
                 "ID": "tuananh"
             }
             
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] #{phien_id}: {d1}-{d2}-{d3}={tong} ({ket_qua_text}) | Dự đoán tiếp: {pred} ({conf}%) | W/L: {win_count}/{loss_count}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] #{phien_id}: {d1}-{d2}-{d3}={tong} {ket_qua_text} | Pattern: {pattern_str[-10:]} → Soi: {pred} ({conf}%)")
             
+        except requests.exceptions.RequestException as e:
+            print(f"Lỗi kết nối API: {e}")
         except Exception as e:
-            print(f"Lỗi: {e}")
+            print(f"Lỗi xử lý dữ liệu: {e}")
         
-        time.sleep(2)
+        time.sleep(2) # Chờ 2 giây trước khi lấy phiên mới
 
 
 threading.Thread(target=fetch_loop, daemon=True).start()
 
-# ===============================
-# API
-# ===============================
 @app.route("/api/taixiumd5", methods=["GET"])
 def api_data():
+    """Endpoint trả về dữ liệu dự đoán hiện tại dưới dạng JSON"""
     return jsonify(latest_data)
 
 @app.route("/", methods=["GET"])
 def home():
-    return ""
+    """Trang chủ đơn giản, có thể dùng để kiểm tra API đang chạy"""
+    return "Tai Xiu MD5 Prediction Bot Running. Access data at /api/taixiumd5"
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("🎯 HỆ THỐNG DỰ ĐOÁN TÀI XỈU - THEO DÕI WIN/LOSS")
-    print("=" * 70)
-    print("📊 5 thuật toán:")
-    print("   1. Mean Reversion (Hồi quy trung bình)")
-    print("   2. Streak Probability (Xác suất chuỗi)")
-    print("   3. Conditional Probability (Xác suất điều kiện)")
-    print("   4. MA Crossover (Trung bình động)")
-    print("   5. Dice Statistics (Thống kê xúc xắc)")
-    print("=" * 70)
-    print("📈 Theo dõi: Win/Loss, Tỷ lệ thắng, Chuỗi hiện tại")
     print("📡 API: http://0.0.0.0:10000/api/taixiumd5")
-    print("=" * 70)
+    # Thay đổi host và port theo môi trường chạy của bạn
     app.run(host="0.0.0.0", port=10000, debug=False)
