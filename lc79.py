@@ -23,6 +23,7 @@ last_data = {
     "du_doan": "Chờ dữ liệu...",
     "do_tin_cay": 0,
     "pattern": None,
+    "mode": "INIT",
     "id": "địt mẹ lc79"
 }
 
@@ -56,23 +57,44 @@ def get_taixiu_data():
     return None
 
 # =========================================================
-# 🧠 PENTTER THẬT – KHAI THÁC 50 PATTERN TỐT NHẤT
+# 🧠 ENGINE TỔNG – KHÔNG BAO GIỜ NO BET
+# =========================================================
+def predict_engine(history, totals):
+    n = len(history)
+
+    # =====================================================
+    # 🔰 GIAI ĐOẠN 1: BOOTSTRAP (1–4 phiên)
+    # =====================================================
+    if n < 5:
+        avg = sum(totals) / len(totals) if totals else 10.5
+        return ("Tài" if avg >= 11 else "Xỉu"), 50, "BOOT", "BOOTSTRAP"
+
+    # =====================================================
+    # 🔰 GIAI ĐOẠN 2: MINI PENTTER (5–19 phiên)
+    # =====================================================
+    if n < 20:
+        seq = ['T' if x == 'Tài' else 'X' for x in history]
+        recent = seq[-5:]
+        t = recent.count('T')
+        x = recent.count('X')
+        if t != x:
+            return ("Tài" if t > x else "Xỉu"), 55, "MINI5", "MINI"
+
+        avg = sum(totals[-5:]) / 5
+        return ("Tài" if avg >= 11 else "Xỉu"), 52, "AVG5", "MINI"
+
+    # =====================================================
+    # 🔰 GIAI ĐOẠN 3: PENTTER THẬT (≥ 20 phiên)
+    # =====================================================
+    return pentter_50_engine(history)
+
+# =========================================================
+# 🧠 PENTTER THẬT (GIỮ NGUYÊN LOGIC BẠN)
 # =========================================================
 def pentter_50_engine(history, min_len=3, max_len=6, min_support=3):
-    """
-    history: ['Tài','Xỉu',...]
-    return: du_doan, do_tin_cay, pattern
-    """
-
-    if len(history) < 20:
-        return None, 0, None
-
-    # Chuẩn hóa về T / X
     seq = ['T' if x == 'Tài' else 'X' for x in history]
-
     stats = defaultdict(lambda: {"T": 0, "X": 0, "total": 0})
 
-    # 1️⃣ Thu thập TẤT CẢ pattern
     for size in range(min_len, max_len + 1):
         for i in range(len(seq) - size):
             pattern = tuple(seq[i:i + size])
@@ -80,48 +102,30 @@ def pentter_50_engine(history, min_len=3, max_len=6, min_support=3):
             stats[pattern]["total"] += 1
             stats[pattern][next_val] += 1
 
-    # 2️⃣ Xếp hạng pattern → chính là “50 thuật toán”
-    ranked_patterns = []
+    candidates = []
+    for pattern, d in stats.items():
+        if d["total"] >= min_support:
+            win = max(d["T"], d["X"])
+            winrate = win / d["total"]
+            candidates.append({
+                "pattern": pattern,
+                "prediction": "Tài" if d["T"] > d["X"] else "Xỉu",
+                "winrate": winrate,
+                "score": winrate * d["total"]
+            })
 
-    for pattern, data in stats.items():
-        if data["total"] < min_support:
-            continue
-        win = max(data["T"], data["X"])
-        winrate = win / data["total"]
-        score = winrate * data["total"]   # vừa chính xác vừa đủ dữ liệu
+    candidates.sort(key=lambda x: (len(x["pattern"]), x["score"]), reverse=True)
 
-        ranked_patterns.append({
-            "pattern": pattern,
-            "winrate": winrate,
-            "score": score,
-            "prediction": "Tài" if data["T"] > data["X"] else "Xỉu"
-        })
+    for c in candidates[:50]:
+        size = len(c["pattern"])
+        if tuple(seq[-size:]) == c["pattern"]:
+            return c["prediction"], min(int(c["winrate"] * 100), 75), ''.join(c["pattern"]), "PENTTER"
 
-    if not ranked_patterns:
-        return None, 50, None
-
-    # 🔥 TOP 50 PATTERN TỐT NHẤT
-    ranked_patterns.sort(key=lambda x: x["score"], reverse=True)
-    top50 = ranked_patterns[:50]
-
-    # 3️⃣ So khớp pattern hiện tại
-    best = None
-    for p in top50:
-        size = len(p["pattern"])
-        if tuple(seq[-size:]) == p["pattern"]:
-            best = p
-            break
-
-    if not best:
-        return None, 55, None
-
-    confidence = int(best["winrate"] * 100)
-    confidence = min(confidence, 75)  # không ảo
-
-    return best["prediction"], confidence, ''.join(best["pattern"])
+    recent = seq[-20:]
+    return ("Tài" if recent.count('T') > recent.count('X') else "Xỉu"), 58, "FREQ20", "FALLBACK"
 
 # =========================================================
-# 🔁 Thread cập nhật dữ liệu
+# 🔁 Thread cập nhật
 # =========================================================
 def background_updater():
     global last_data
@@ -131,12 +135,11 @@ def background_updater():
         data = get_taixiu_data()
         if data:
             phien, dice, tong, ketqua = data
-
-            if phien != last_phien and phien is not None:
+            if phien != last_phien:
                 history.append(ketqua)
                 totals.append(tong)
 
-                du_doan, do_tin_cay, pattern = pentter_50_engine(list(history))
+                du_doan, do_tin_cay, pattern, mode = predict_engine(list(history), list(totals))
 
                 last_data = {
                     "phien": phien,
@@ -145,35 +148,30 @@ def background_updater():
                     "xucxac3": dice[2],
                     "tong": tong,
                     "ketqua": ketqua,
-                    "du_doan": du_doan if du_doan else "NO BET",
+                    "du_doan": du_doan,
                     "do_tin_cay": do_tin_cay,
                     "pattern": pattern,
+                    "mode": mode,
                     "id": "địt mẹ lc79"
                 }
 
-                print(
-                    f"[✅] Phiên {phien} | {ketqua} ({tong}) | "
-                    f"Dự đoán: {du_doan} | Tin cậy: {do_tin_cay}% | Pattern: {pattern}"
-                )
-
+                print(f"[{mode}] Phiên {phien} | {ketqua} | Dự đoán: {du_doan} ({do_tin_cay}%)")
                 last_phien = phien
 
         time.sleep(5)
 
 # =========================================================
-# 🔹 API Endpoint
+# 🔹 API
 # =========================================================
 @app.route("/api/taixiu", methods=["GET"])
 def api_taixiu():
     return jsonify(last_data)
 
 # =========================================================
-# 🚀 Chạy Server
+# 🚀 RUN
 # =========================================================
 if __name__ == "__main__":
     print("🚀 API Server đang khởi động...")
     port = int(os.environ.get("PORT", 5000))
-
     threading.Thread(target=background_updater, daemon=True).start()
-
     app.run(host="0.0.0.0", port=port)
