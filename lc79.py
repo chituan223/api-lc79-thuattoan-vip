@@ -2,169 +2,178 @@ from flask import Flask, jsonify
 import requests
 import time
 import threading
-from collections import deque
+from collections import deque, defaultdict
 import os
-import math
 
 app = Flask(__name__)
 
 # =========================================================
-# 💾 Bộ nhớ tạm
+# 💾 Bộ nhớ lịch sử
 # =========================================================
-history = deque(maxlen=1000)
+history = deque(maxlen=1000)   # 'Tài' / 'Xỉu'
+totals  = deque(maxlen=1000)
 
 last_data = {
     "phien": None,
-    "xuc_xac_1": 0,
-    "xuc_xac_2": 0,
-    "xuc_xac_3": 0,
+    "xucxac1": 0,
+    "xucxac2": 0,
+    "xucxac3": 0,
     "tong": 0,
     "ketqua": "",
-    "du_doan": "Đang khởi động...",
+    "du_doan": "Chờ dữ liệu...",
     "do_tin_cay": 0,
-    "suc_manh": 0,
-    "entropy": 0,
-    "con_lai": 5,  # Mặc định cần gom 5 phiên
+    "pattern": None,
     "id": "địt mẹ lc79"
 }
 
 # =========================================================
-# 🧠 CORE ALGORITHM: ML CONSENSUS (FAST MODE)
-# =========================================================
-def master_ai_engine(history_list):
-    count = len(history_list)
-    nguong_du_doan = 5
-    
-    # Nếu chưa đủ 5 phiên, trả về số phiên còn thiếu
-    if count < nguong_du_doan:
-        con_lai = nguong_du_doan - count
-        return {
-            "du_doan": f"Gom data ({count}/{nguong_du_doan})", 
-            "do_tin_cay": 0, 
-            "suc_manh": 0, 
-            "entropy": 0,
-            "con_lai": con_lai
-        }
-
-    h = list(history_list)[-60:]
-    data = [1 if x == "Tài" else 0 for x in h]
-    
-    w_t = 0.0 
-    w_x = 0.0 
-
-    # --- LỚP 1: BAYESIAN INFERENCE ---
-    max_range = min(6, count)
-    for length in range(2, max_range): 
-        curr = data[-length:]
-        for i in range(len(data) - length - 1):
-            if data[i:i+length] == curr:
-                if data[i+length] == 1: w_t += (15.0 * length)
-                else: w_x += (15.0 * length)
-
-    # --- LỚP 2: SHANNON ENTROPY ---
-    def calculate_entropy(seq):
-        if len(seq) < 2: return 0.9
-        p_t = seq.count(1) / len(seq)
-        p_x = 1 - p_t
-        if p_t == 0 or p_x == 0: return 0.1
-        return - (p_t * math.log2(p_t) + p_x * math.log2(p_x))
-
-    entropy_recent = calculate_entropy(data[-15:])
-    if entropy_recent < 0.6:
-        if data[-1] == 1: w_t += 100.0
-        else: w_x += 100.0
-
-    # --- LỚP 3: DYNAMIC MARKOV ---
-    transitions = {"1": {"next_1": 0, "next_0": 0}, "0": {"next_1": 0, "next_0": 0}}
-    for i in range(len(data)-1):
-        state = str(data[i])
-        nxt = data[i+1]
-        transitions[state]["next_1" if nxt == 1 else "next_0"] += 1
-    
-    curr_state = str(data[-1])
-    w_t += (transitions[curr_state].get("next_1", 0) * 15)
-    w_x += (transitions[curr_state].get("next_0", 0) * 15)
-
-    # --- LỚP 4: STREAK ANALYSIS ---
-    stk = 1
-    for i in range(len(h)-2, -1, -1):
-        if h[i] == h[-1]: stk += 1
-        else: break
-    
-    if stk >= 3:
-        rev_power = (stk ** 2) * 15
-        if h[-1] == "Tài": w_x += rev_power
-        else: w_t += rev_power
-
-    # --- TỔNG HỢP ---
-    total_w = w_t + w_x
-    diff = abs(w_t - w_x)
-
-    if total_w == 0 or diff < 40:
-        return {"du_doan": "CHỜ NHỊP", "do_tin_cay": 0, "suc_manh": 0, "entropy": round(entropy_recent, 3), "con_lai": 0}
-
-    prediction = "Tài" if w_t > w_x else "Xỉu"
-    conf = (max(w_t, w_x) / total_w) * 100
-
-    return {
-        "du_doan": prediction,
-        "do_tin_cay": round(min(conf, 98.5), 2),
-        "suc_manh": round(diff, 1),
-        "entropy": round(entropy_recent, 3),
-        "streak": stk,
-        "con_lai": 0 # Khi đã dự đoán thì con_lai = 0
-    }
-
-# =========================================================
-# 🔹 API Fetching & Background Task
+# 🔹 API Tele68
 # =========================================================
 def get_taixiu_data():
-    url = "https://wtxmd52.tele68.com/v1/txmd5/sessions" 
+    url = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=8)
+        res.raise_for_status()
         data = res.json()
+
         if "list" in data and len(data["list"]) > 0:
-            new = data["list"][0]
-            phien = new.get("id")
-            dice = new.get("dices", [1, 2, 3])
-            tong = new.get("point", sum(dice))
-            raw = new.get("resultTruyenThong", "").upper()
-            kq = "Tài" if raw == "TAI" or tong >= 11 else "Xỉu"
-            return phien, dice, tong, kq
-    except: pass
+            newest = data["list"][0]
+            phien = newest.get("id")
+            dice = newest.get("dices", [1, 2, 3])
+            tong = newest.get("point", sum(dice))
+
+            raw = newest.get("resultTruyenThong", "").upper()
+            if raw == "TAI":
+                ketqua = "Tài"
+            elif raw == "XIU":
+                ketqua = "Xỉu"
+            else:
+                ketqua = "Tài" if tong >= 11 else "Xỉu"
+
+            return phien, dice, tong, ketqua
+    except Exception as e:
+        print(f"[❌] Lỗi API: {e}")
     return None
 
+# =========================================================
+# 🧠 PENTTER THẬT – KHAI THÁC 50 PATTERN TỐT NHẤT
+# =========================================================
+def pentter_50_engine(history, min_len=3, max_len=6, min_support=3):
+    """
+    history: ['Tài','Xỉu',...]
+    return: du_doan, do_tin_cay, pattern
+    """
+
+    if len(history) < 20:
+        return None, 0, None
+
+    # Chuẩn hóa về T / X
+    seq = ['T' if x == 'Tài' else 'X' for x in history]
+
+    stats = defaultdict(lambda: {"T": 0, "X": 0, "total": 0})
+
+    # 1️⃣ Thu thập TẤT CẢ pattern
+    for size in range(min_len, max_len + 1):
+        for i in range(len(seq) - size):
+            pattern = tuple(seq[i:i + size])
+            next_val = seq[i + size]
+            stats[pattern]["total"] += 1
+            stats[pattern][next_val] += 1
+
+    # 2️⃣ Xếp hạng pattern → chính là “50 thuật toán”
+    ranked_patterns = []
+
+    for pattern, data in stats.items():
+        if data["total"] < min_support:
+            continue
+        win = max(data["T"], data["X"])
+        winrate = win / data["total"]
+        score = winrate * data["total"]   # vừa chính xác vừa đủ dữ liệu
+
+        ranked_patterns.append({
+            "pattern": pattern,
+            "winrate": winrate,
+            "score": score,
+            "prediction": "Tài" if data["T"] > data["X"] else "Xỉu"
+        })
+
+    if not ranked_patterns:
+        return None, 50, None
+
+    # 🔥 TOP 50 PATTERN TỐT NHẤT
+    ranked_patterns.sort(key=lambda x: x["score"], reverse=True)
+    top50 = ranked_patterns[:50]
+
+    # 3️⃣ So khớp pattern hiện tại
+    best = None
+    for p in top50:
+        size = len(p["pattern"])
+        if tuple(seq[-size:]) == p["pattern"]:
+            best = p
+            break
+
+    if not best:
+        return None, 55, None
+
+    confidence = int(best["winrate"] * 100)
+    confidence = min(confidence, 75)  # không ảo
+
+    return best["prediction"], confidence, ''.join(best["pattern"])
+
+# =========================================================
+# 🔁 Thread cập nhật dữ liệu
+# =========================================================
 def background_updater():
     global last_data
-    last_p = None
+    last_phien = None
+
     while True:
         data = get_taixiu_data()
         if data:
-            phien, dice, tong, kq = data
-            if phien != last_p:
-                history.append(kq)
-                res = master_ai_engine(history)
+            phien, dice, tong, ketqua = data
+
+            if phien != last_phien and phien is not None:
+                history.append(ketqua)
+                totals.append(tong)
+
+                du_doan, do_tin_cay, pattern = pentter_50_engine(list(history))
+
                 last_data = {
-                    "phien": phien, 
-                    "xuc_xac_1": dice[0], "xuc_xac_2": dice[1], "xuc_xac_3": dice[2],
-                    "tong": tong, "ketqua": kq, 
-                    "du_doan": res["du_doan"], 
-                    "do_tin_cay": res["do_tin_cay"],
-                    "suc_manh": res["suc_manh"], 
-                    "entropy": res["entropy"], 
-                    "streak": res.get("streak", 0),
-                    "con_lai": res["con_lai"], # Trả về số phiên còn lại
+                    "phien": phien,
+                    "xucxac1": dice[0],
+                    "xucxac2": dice[1],
+                    "xucxac3": dice[2],
+                    "tong": tong,
+                    "ketqua": ketqua,
+                    "du_doan": du_doan if du_doan else "NO BET",
+                    "do_tin_cay": do_tin_cay,
+                    "pattern": pattern,
                     "id": "địt mẹ lc79"
                 }
-                print(f"[🔥] Phiên {phien}: {kq} | Dự báo: {res['du_doan']} | Còn lại: {res['con_lai']}")
-                last_p = phien
-        time.sleep(4)
 
+                print(
+                    f"[✅] Phiên {phien} | {ketqua} ({tong}) | "
+                    f"Dự đoán: {du_doan} | Tin cậy: {do_tin_cay}% | Pattern: {pattern}"
+                )
+
+                last_phien = phien
+
+        time.sleep(5)
+
+# =========================================================
+# 🔹 API Endpoint
+# =========================================================
 @app.route("/api/taixiu", methods=["GET"])
 def api_taixiu():
     return jsonify(last_data)
 
+# =========================================================
+# 🚀 Chạy Server
+# =========================================================
 if __name__ == "__main__":
-    threading.Thread(target=background_updater, daemon=True).start()
+    print("🚀 API Server đang khởi động...")
     port = int(os.environ.get("PORT", 5000))
+
+    threading.Thread(target=background_updater, daemon=True).start()
+
     app.run(host="0.0.0.0", port=port)
