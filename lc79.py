@@ -1,177 +1,190 @@
 from flask import Flask, jsonify
-import requests
-import time
-import threading
+import requests, time, threading, os
 from collections import deque, defaultdict
-import os
 
 app = Flask(__name__)
 
 # =========================================================
-# 💾 Bộ nhớ lịch sử
+# 💾 HISTORY
 # =========================================================
-history = deque(maxlen=1000)   # 'Tài' / 'Xỉu'
+history = deque(maxlen=1000)
 totals  = deque(maxlen=1000)
 
 last_data = {
     "phien": None,
-    "xucxac1": 0,
-    "xucxac2": 0,
-    "xucxac3": 0,
-    "tong": 0,
     "ketqua": "",
-    "du_doan": "Chờ dữ liệu...",
+    "du_doan": "",
     "do_tin_cay": 0,
-    "pattern": None,
+    "pattern": "",
     "mode": "INIT",
     "id": "địt mẹ lc79"
 }
 
 # =========================================================
-# 🔹 API Tele68
+# 🔹 API
 # =========================================================
 def get_taixiu_data():
     url = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
     try:
-        res = requests.get(url, timeout=8)
-        res.raise_for_status()
-        data = res.json()
+        r = requests.get(url, timeout=8).json()
+        d = r["list"][0]
+        tong = d.get("point", sum(d.get("dices", [1,2,3])))
+        raw = d.get("resultTruyenThong", "").upper()
+        kq = "Tài" if raw=="TAI" else "Xỉu" if raw=="XIU" else ("Tài" if tong>=11 else "Xỉu")
+        return d["id"], kq, tong
+    except:
+        return None
 
-        if "list" in data and len(data["list"]) > 0:
-            newest = data["list"][0]
-            phien = newest.get("id")
-            dice = newest.get("dices", [1, 2, 3])
-            tong = newest.get("point", sum(dice))
+# =========================================================
+# 🔧 UTILS
+# =========================================================
+def to_TX(seq):
+    return ['T' if x=='Tài' else 'X' for x in seq]
 
-            raw = newest.get("resultTruyenThong", "").upper()
-            if raw == "TAI":
-                ketqua = "Tài"
-            elif raw == "XIU":
-                ketqua = "Xỉu"
+def to_blocks(seq):
+    blocks=[]
+    cur=seq[0]; cnt=1
+    for s in seq[1:]:
+        if s==cur: cnt+=1
+        else:
+            blocks.append((cur,cnt))
+            cur=s; cnt=1
+    blocks.append((cur,cnt))
+    return blocks
+
+# =========================================================
+# 🧠 GROUP 1 – BLOCK PENTTER
+# =========================================================
+def block_pentter(seq):
+    blocks = to_blocks(seq)
+    vote={"Tài":0.0,"Xỉu":0.0}
+
+    for size in range(3,7):
+        for i in range(len(blocks)-size):
+            pat = tuple(blocks[i:i+size])
+            next_b = blocks[i+size][0]
+            if tuple(blocks[-size:])==pat:
+                weight = size * blocks[i+size][1]
+                vote["Tài" if next_b=='T' else "Xỉu"] += weight
+
+    return vote, "BLOCK"
+
+# =========================================================
+# 🧠 GROUP 2 – SEQUENCE SHAPE
+# =========================================================
+def sequence_pentter(seq):
+    vote={"Tài":0.0,"Xỉu":0.0}
+    for size in range(4,9):
+        cur = seq[-size:]
+        hits=[]
+        for i in range(len(seq)-size):
+            if seq[i:i+size]==cur:
+                hits.append(seq[i+size])
+        if len(hits)>=2:
+            w = len(hits)*size
+            if hits.count('T')>hits.count('X'):
+                vote["Tài"]+=w
             else:
-                ketqua = "Tài" if tong >= 11 else "Xỉu"
-
-            return phien, dice, tong, ketqua
-    except Exception as e:
-        print(f"[❌] Lỗi API: {e}")
-    return None
+                vote["Xỉu"]+=w
+    return vote, "SEQ"
 
 # =========================================================
-# 🧠 ENGINE TỔNG – KHÔNG BAO GIỜ NO BET
+# 🧠 GROUP 3 – TRANSITION
 # =========================================================
-def predict_engine(history, totals):
-    n = len(history)
-
-    # =====================================================
-    # 🔰 GIAI ĐOẠN 1: BOOTSTRAP (1–4 phiên)
-    # =====================================================
-    if n < 5:
-        avg = sum(totals) / len(totals) if totals else 10.5
-        return ("Tài" if avg >= 11 else "Xỉu"), 50, "BOOT", "BOOTSTRAP"
-
-    # =====================================================
-    # 🔰 GIAI ĐOẠN 2: MINI PENTTER (5–19 phiên)
-    # =====================================================
-    if n < 20:
-        seq = ['T' if x == 'Tài' else 'X' for x in history]
-        recent = seq[-5:]
-        t = recent.count('T')
-        x = recent.count('X')
-        if t != x:
-            return ("Tài" if t > x else "Xỉu"), 55, "MINI5", "MINI"
-
-        avg = sum(totals[-5:]) / 5
-        return ("Tài" if avg >= 11 else "Xỉu"), 52, "AVG5", "MINI"
-
-    # =====================================================
-    # 🔰 GIAI ĐOẠN 3: PENTTER THẬT (≥ 20 phiên)
-    # =====================================================
-    return pentter_50_engine(history)
+def transition_pentter(seq):
+    vote={"Tài":0.0,"Xỉu":0.0}
+    for size in range(3,6):
+        cur = seq[-size:]
+        t=x=0
+        for i in range(len(seq)-size):
+            if seq[i:i+size]==cur:
+                if seq[i+size]=='T': t+=1
+                else: x+=1
+        if t+x>=3:
+            w=(t+x)*size
+            vote["Tài" if t>x else "Xỉu"]+=w
+    return vote, "TRANS"
 
 # =========================================================
-# 🧠 PENTTER THẬT (GIỮ NGUYÊN LOGIC BẠN)
+# 🧠 GROUP 4 – STREAK PRESSURE
 # =========================================================
-def pentter_50_engine(history, min_len=3, max_len=6, min_support=3):
-    seq = ['T' if x == 'Tài' else 'X' for x in history]
-    stats = defaultdict(lambda: {"T": 0, "X": 0, "total": 0})
-
-    for size in range(min_len, max_len + 1):
-        for i in range(len(seq) - size):
-            pattern = tuple(seq[i:i + size])
-            next_val = seq[i + size]
-            stats[pattern]["total"] += 1
-            stats[pattern][next_val] += 1
-
-    candidates = []
-    for pattern, d in stats.items():
-        if d["total"] >= min_support:
-            win = max(d["T"], d["X"])
-            winrate = win / d["total"]
-            candidates.append({
-                "pattern": pattern,
-                "prediction": "Tài" if d["T"] > d["X"] else "Xỉu",
-                "winrate": winrate,
-                "score": winrate * d["total"]
-            })
-
-    candidates.sort(key=lambda x: (len(x["pattern"]), x["score"]), reverse=True)
-
-    for c in candidates[:50]:
-        size = len(c["pattern"])
-        if tuple(seq[-size:]) == c["pattern"]:
-            return c["prediction"], min(int(c["winrate"] * 100), 75), ''.join(c["pattern"]), "PENTTER"
-
-    recent = seq[-20:]
-    return ("Tài" if recent.count('T') > recent.count('X') else "Xỉu"), 58, "FREQ20", "FALLBACK"
+def pressure_pentter(seq):
+    vote={"Tài":0.0,"Xỉu":0.0}
+    tail=seq[-10:]
+    t=tail.count('T'); x=tail.count('X')
+    if t>=7: vote["Xỉu"]+=t
+    if x>=7: vote["Tài"]+=x
+    if abs(t-x)>=4:
+        vote["Tài" if t>x else "Xỉu"]+=abs(t-x)*2
+    return vote, "PRESS"
 
 # =========================================================
-# 🔁 Thread cập nhật
+# 🧠 MASTER ENGINE (NHIỀU THUẬT TOÁN)
 # =========================================================
-def background_updater():
+def multi_pentter_engine(history):
+    if len(history)<10:
+        return None,0,"","INIT"
+
+    seq = to_TX(history)
+    total_vote={"Tài":0.0,"Xỉu":0.0}
+    used=[]
+
+    for func in [block_pentter, sequence_pentter, transition_pentter, pressure_pentter]:
+        v, name = func(seq)
+        if v["Tài"]>0 or v["Xỉu"]>0:
+            total_vote["Tài"]+=v["Tài"]
+            total_vote["Xỉu"]+=v["Xỉu"]
+            used.append(name)
+
+    if total_vote["Tài"]==0 and total_vote["Xỉu"]==0:
+        return ("Tài" if seq.count('T')>=seq.count('X') else "Xỉu"),55,"FREQ","FALLBACK"
+
+    if total_vote["Tài"]>=total_vote["Xỉu"]:
+        conf=int(total_vote["Tài"]/(total_vote["Tài"]+total_vote["Xỉu"])*100)
+        return "Tài",min(conf,75),"+".join(used),"PENTTER"
+    else:
+        conf=int(total_vote["Xỉu"]/(total_vote["Tài"]+total_vote["Xỉu"])*100)
+        return "Xỉu",min(conf,75),"+".join(used),"PENTTER"
+
+# =========================================================
+# 🔁 BACKGROUND
+# =========================================================
+def background():
     global last_data
-    last_phien = None
-
+    last=None
     while True:
-        data = get_taixiu_data()
-        if data:
-            phien, dice, tong, ketqua = data
-            if phien != last_phien:
-                history.append(ketqua)
+        d=get_taixiu_data()
+        if d:
+            phien,kq,tong=d
+            if phien!=last:
+                history.append(kq)
                 totals.append(tong)
 
-                du_doan, do_tin_cay, pattern, mode = predict_engine(list(history), list(totals))
+                du_doan,conf,pat,mode = multi_pentter_engine(list(history))
 
-                last_data = {
-                    "phien": phien,
-                    "xucxac1": dice[0],
-                    "xucxac2": dice[1],
-                    "xucxac3": dice[2],
-                    "tong": tong,
-                    "ketqua": ketqua,
-                    "du_doan": du_doan,
-                    "do_tin_cay": do_tin_cay,
-                    "pattern": pattern,
-                    "mode": mode,
-                    "id": "địt mẹ lc79"
+                last_data={
+                    "phien":phien,
+                    "ketqua":kq,
+                    "du_doan":du_doan,
+                    "do_tin_cay":conf,
+                    "pattern":pat,
+                    "mode":mode,
+                    "id":"địt mẹ lc79"
                 }
-
-                print(f"[{mode}] Phiên {phien} | {ketqua} | Dự đoán: {du_doan} ({do_tin_cay}%)")
-                last_phien = phien
-
+                print(f"[{mode}] {phien} | {kq} | {du_doan} | {conf}% | {pat}")
+                last=phien
         time.sleep(5)
 
 # =========================================================
-# 🔹 API
+# 🌐 API
 # =========================================================
-@app.route("/api/taixiu", methods=["GET"])
-def api_taixiu():
+@app.route("/api/taixiu")
+def api():
     return jsonify(last_data)
 
 # =========================================================
 # 🚀 RUN
 # =========================================================
-if __name__ == "__main__":
-    print("🚀 API Server đang khởi động...")
-    port = int(os.environ.get("PORT", 5000))
-    threading.Thread(target=background_updater, daemon=True).start()
-    app.run(host="0.0.0.0", port=port)
+if __name__=="__main__":
+    threading.Thread(target=background,daemon=True).start()
+    app.run(host="0.0.0.0",port=int(os.environ.get("PORT",5000)))
