@@ -12,6 +12,10 @@ totals  = deque(maxlen=1000)
 
 last_data = {
     "phien": None,
+    "xucxac1": 0,
+    "xucxac2": 0,
+    "xucxac3": 0,
+    "tong": 0,
     "ketqua": "",
     "du_doan": "",
     "do_tin_cay": 0,
@@ -28,15 +32,21 @@ def get_taixiu_data():
     try:
         r = requests.get(url, timeout=8).json()
         d = r["list"][0]
-        tong = d.get("point", sum(d.get("dices", [1,2,3])))
+
+        dices = d.get("dices", [1,2,3])
+        x1, x2, x3 = dices[0], dices[1], dices[2]
+        tong = d.get("point", x1 + x2 + x3)
+
         raw = d.get("resultTruyenThong", "").upper()
         kq = "Tài" if raw=="TAI" else "Xỉu" if raw=="XIU" else ("Tài" if tong>=11 else "Xỉu")
-        return d["id"], kq, tong
-    except:
+
+        return d["id"], kq, tong, x1, x2, x3
+    except Exception as e:
+        print("[API ERROR]", e)
         return None
 
 # =========================================================
-# 🔧 UTILS
+# 🔧 UTILS (GIỮ NGUYÊN)
 # =========================================================
 def to_TX(seq):
     return ['T' if x=='Tài' else 'X' for x in seq]
@@ -53,7 +63,7 @@ def to_blocks(seq):
     return blocks
 
 # =========================================================
-# 🧠 GROUP 1 – BLOCK PENTTER
+# 🧠 GROUP 1 – BLOCK PENTTER (GIỮ NGUYÊN)
 # =========================================================
 def block_pentter(seq):
     blocks = to_blocks(seq)
@@ -70,7 +80,7 @@ def block_pentter(seq):
     return vote, "BLOCK"
 
 # =========================================================
-# 🧠 GROUP 2 – SEQUENCE SHAPE
+# 🧠 GROUP 2 – SEQUENCE SHAPE (GIỮ NGUYÊN)
 # =========================================================
 def sequence_pentter(seq):
     vote={"Tài":0.0,"Xỉu":0.0}
@@ -89,7 +99,7 @@ def sequence_pentter(seq):
     return vote, "SEQ"
 
 # =========================================================
-# 🧠 GROUP 3 – TRANSITION
+# 🧠 GROUP 3 – TRANSITION (GIỮ NGUYÊN)
 # =========================================================
 def transition_pentter(seq):
     vote={"Tài":0.0,"Xỉu":0.0}
@@ -106,7 +116,7 @@ def transition_pentter(seq):
     return vote, "TRANS"
 
 # =========================================================
-# 🧠 GROUP 4 – STREAK PRESSURE
+# 🧠 GROUP 4 – STREAK PRESSURE (GIỮ NGUYÊN)
 # =========================================================
 def pressure_pentter(seq):
     vote={"Tài":0.0,"Xỉu":0.0}
@@ -119,7 +129,7 @@ def pressure_pentter(seq):
     return vote, "PRESS"
 
 # =========================================================
-# 🧠 MASTER ENGINE (NHIỀU THUẬT TOÁN)
+# 🧠 MASTER ENGINE (GIỮ NGUYÊN)
 # =========================================================
 def multi_pentter_engine(history):
     if len(history)<10:
@@ -155,7 +165,7 @@ def background():
     while True:
         d=get_taixiu_data()
         if d:
-            phien,kq,tong=d
+            phien,kq,tong,x1,x2,x3=d
             if phien!=last:
                 history.append(kq)
                 totals.append(tong)
@@ -164,6 +174,10 @@ def background():
 
                 last_data={
                     "phien":phien,
+                    "xucxac1":x1,
+                    "xucxac2":x2,
+                    "xucxac3":x3,
+                    "tong":tong,
                     "ketqua":kq,
                     "du_doan":du_doan,
                     "do_tin_cay":conf,
