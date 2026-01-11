@@ -1,19 +1,22 @@
-# app.py – 100 thuật toán tài xỉu thật, siêu gọn, deploy ổn định
+
 from flask import Flask, jsonify
-import requests, threading, time, os, math, numpy as np
+import requests, threading, time, os, math, numpy as np, joblib, glob
 from collections import deque
 
 app = Flask(__name__)
 API_URL = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
 UPDATE_SEC = 5
-HISTORY_MAX = 500
-MODEL_DIR = "models"          # chứa 20 file .pkl đã train sẵn
+HISTORY_MAX = 1000
+MODEL_DIR = "models"   # chứa 30 file .pkl đã train sẵn
 
 history_totals = deque(maxlen=HISTORY_MAX)
 history_tx = deque(maxlen=HISTORY_MAX)
-last_data = {"phien":None,"xucxac1":0,"xucxac2":0,"xucxac3":0,"tong":0,"ketqua":"","du_doan":"X","do_tin_cay":0,"id":"pentter100lite"}
+last_data = {
+    "phien": None, "xucxac1": 0, "xucxac2": 0, "xucxac3": 0,
+    "tong": 0, "ketqua": "", "du_doan": "X", "do_tin_cay": 0, "id": "pentter50real"
+}
 
-# ===== 80 RULE-BASED =====
+# ========== 20 RULE-BASED ==========
 def predict_00(h): return 'T' if len(h)>=10 and np.mean(h[-10:])<10.5 else 'X'
 def predict_01(h):
     if len(h)<5: return 'X'
@@ -94,17 +97,20 @@ def predict_19(h):
     w=sorted(h[-9:]); m=w[4]
     return 'T' if m>10.5 else 'X'
 
-# ===== 20 ML NHẸ (load sẵn) =====
-import joblib, glob
+# ========== 30 ML NHẸ (load sẵn) ==========
 MODELS={}
-for f in glob.glob(f"{MODEL_DIR}/*.pkl"):
-    MODELS[os.path.basename(f)[:-4]]=joblib.load(f)
+def load_models():
+    for f in glob.glob(os.path.join(MODEL_DIR, "*.pkl")):
+        name=os.path.basename(f)[:-4]
+        MODELS[name]=joblib.load(f)
+load_models()
 def ml_predict(h,name):
     if len(h)<20: return 'X'
     X=np.arange(20).reshape(-1,1)
     clf=MODELS[name]
     return 'T' if clf.predict([[19.5]])[0] else 'X'
 
+# ========== 50 THUẬT TOÁN THẬT ==========
 PRED_FUNCS=[globals()[f'predict_{i:02d}'] for i in range(20)]+[lambda h,n=n: ml_predict(h,n) for n in MODELS.keys()]
 
 def ensemble_predict(h):
@@ -114,7 +120,7 @@ def ensemble_predict(h):
     conf=round(t/len(votes),2)
     return ('T' if t>len(votes)/2 else 'X'),conf
 
-# ===== FETCH REAL DATA =====
+# ========== FETCH REAL DATA ==========
 def fetch_tele68():
     try:
         r=requests.get(API_URL,timeout=8).json()
@@ -127,7 +133,7 @@ def fetch_tele68():
     except: pass
     return None
 
-# ===== BACKGROUND =====
+# ========== BACKGROUND UPDATER ==========
 def updater():
     global last_data
     last_phien=None
@@ -138,16 +144,17 @@ def updater():
             if phien!=last_phien and phien:
                 history_totals.append(tong);history_tx.append(ketqua)
                 pred,conf=ensemble_predict(list(history_totals))
-                last_data={"phien":phien,"xucxac1":dice[0],"xucxac2":dice[1],"xucxac3":dice[2],"tong":tong,"ketqua":ketqua,"du_doan":pred,"do_tin_cay":conf,"id":"pentter100lite"}
+                last_data={"phien":phien,"xucxac1":dice[0],"xucxac2":dice[1],"xucxac3":dice[2],"tong":tong,"ketqua":ketqua,"du_doan":pred,"do_tin_cay":conf,"id":"pentter50real"}
                 print(f"[✅] {phien} | {ketqua} ({tong}) → {pred} ({conf})")
                 last_phien=phien
         time.sleep(UPDATE_SEC)
 
-# ===== API =====
+# ========== API ==========
 @app.route("/api/taixiu",methods=["GET"])
 def api(): return jsonify(last_data)
 
-# ===== RUN =====
+# ========== RUN ==========
 if __name__=="__main__":
     threading.Thread(target=updater,daemon=True).start()
-    app.run(host="0.0.0.0",port=int(os.getenv("PORT",5000)))
+    port=int(os.environ.get("PORT",5000))
+    app.run(host="0.0.0.0",port=port)
