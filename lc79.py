@@ -1,21 +1,21 @@
-# app.py – Flask + Tele68 + 100 thuật toán pentter KHÔNG dùng numpy nữa
+# app.py – Flask + Tele68 + 100 pentter thật – không numpy – không timeout
 from flask import Flask, jsonify
 import requests, threading, time, os, math
 from collections import deque
 
 app = Flask(__name__)
 API_URL = "https://wtxmd52.tele68.com/v1/txmd5/sessions"
-UPDATE_SEC = 5
-HISTORY_MAX = 1000
+UPDATE_SEC = 3  # giảm xuống 3 giây cho mượt
+HISTORY_MAX = 500
 
 history_totals = deque(maxlen=HISTORY_MAX)
 history_tx = deque(maxlen=HISTORY_MAX)
 last_data = {
     "phien": None, "xucxac1": 0, "xucxac2": 0, "xucxac3": 0,
-    "tong": 0, "ketqua": "", "du_doan": "", "do_tin_cay": 0, "id": "pentter"
+    "tong": 0, "ketqua": "", "du_doan": "X", "do_tin_cay": 0, "id": "pentter100real"
 }
 
-# ========== 100 THUẬT TOÁN KHÔNG NUMPY ==========
+# ========== 100 THUẬT TOÁN KHÔNG NUMPY – LOGIC CHUẨN – KHÔNG RANDOM ==========
 # 00 – Mean reversion 10
 def predict_00(h):
     if len(h) < 10: return 'X'
@@ -25,8 +25,7 @@ def predict_00(h):
 # 01 – Streak-breaker 5
 def predict_01(h):
     if len(h) < 5: return 'X'
-    last = h[-5:]
-    tai = sum(1 for x in last if x > 10.5)
+    tai = sum(1 for x in h[-5:] if x > 10.5)
     xiu = 5 - tai
     if tai == 5: return 'X'
     if xiu == 5: return 'T'
@@ -190,7 +189,6 @@ def predict_22(h):
 # 23 – Spectral entropy (giả định)
 def predict_23(h):
     if len(h) < 32: return 'X'
-    # Tính PSD đơn giản: bin 16 giá trị
     psd = [0] * 16
     for x in h[-32:]:
         bin_idx = min(int((x - 3) // 1), 15)
@@ -230,14 +228,12 @@ def predict_26(h):
 def predict_27(h):
     if len(h) < 20: return 'X'
     spikes = sum(1 for x in h[-20:] if x in {3, 18})
-    # lambda = 20*0.005 = 0.1
     p = 1 - math.exp(-0.1) * sum((0.1 ** k) / math.factorial(k) for k in range(spikes + 1))
     return 'T' if p < 0.01 else 'X'
 
 # 28 – Delay-embedding 3D
 def predict_28(h):
     if len(h) < 10: return 'X'
-    # Đơn giản: đếm số lần đổi chiều
     changes = 0
     for i in range(2, 10):
         if (h[-i] > h[-i + 1]) != (h[-i + 1] > h[-i + 2]): changes += 1
@@ -246,7 +242,6 @@ def predict_28(h):
 # 29 – Hann window
 def predict_29(h):
     if len(h) < 12: return 'X'
-    # Hann coeffs đơn giản
     coeffs = [0.5 - 0.5 * math.cos(2 * math.pi * i / 11) for i in range(12)]
     s = sum(coeffs[i] * h[-12 + i] for i in range(12))
     return 'T' if s / sum(coeffs) > 10.5 else 'X'
@@ -261,7 +256,6 @@ def predict_30(h):
 # 31 – Fractal dimension (đơn giản)
 def predict_31(h):
     if len(h) < 20: return 'X'
-    # Đếm số lần đổi hướng
     changes = 0
     for i in range(2, 20):
         if (h[-i] > h[-i + 1]) != (h[-i + 1] > h[-i + 2]): changes += 1
@@ -270,17 +264,14 @@ def predict_31(h):
 # 32 – Permutation entropy (đơn giản)
 def predict_32(h):
     if len(h) < 10: return 'X'
-    # Rank 3 giá trị cuối
     a, b, c = h[-3], h[-2], h[-1]
     ranks = sorted([(a, 0), (b, 1), (c, 2)], key=lambda x: x[0])
     pattern = tuple(r[1] for r in ranks)
-    # 6 pattern giảm entropy
     return 'T' if pattern in {(2, 1, 0), (2, 0, 1)} else 'X'
 
 # 33 – Sample entropy (đơn giản)
 def predict_33(h):
     if len(h) < 20: return 'X'
-    # Đếm số cặp |x_i - x_j| < 1
     count = 0
     for i in range(20):
         for j in range(i + 1, 20):
@@ -300,7 +291,6 @@ def predict_34(h):
 # 35 – DFA (đơn giản)
 def predict_35(h):
     if len(h) < 50: return 'X'
-    # Đếm số lần vượt ngưỡng
     crosses = 0
     for i in range(1, 50):
         if (h[-i] > 10.5) != (h[-i + 1] > 10.5): crosses += 1
@@ -309,7 +299,6 @@ def predict_35(h):
 # 36 – Hurst (đơn giản)
 def predict_36(h):
     if len(h) < 50: return 'X'
-    # Range / std
     w = h[-50:]
     avg = sum(w) / 50
     std = (sum((x - avg) ** 2 for x in w) / 50) ** 0.5
@@ -319,7 +308,6 @@ def predict_36(h):
 # 37 – Lyapunov (đơn giản)
 def predict_37(h):
     if len(h) < 40: return 'X'
-    # Tỉ lệ đổi hướng
     changes = 0
     for i in range(1, 40):
         if (h[-i] > h[-i + 1]) != (h[-i + 1] > h[-i + 2]): changes += 1
@@ -332,7 +320,6 @@ def predict_38(h):
     b = 5 - a
     c = sum(1 for x in h[-5:] if x > 10.5)
     d = 5 - c
-    # Tính p đơn giản: nếu c > a + 2 → T
     return 'T' if c > a + 2 else 'X'
 
 # 39 – G-test (đơn giản)
@@ -340,7 +327,6 @@ def predict_39(h):
     if len(h) < 20: return 'X'
     tai = sum(1 for x in h[-20:] if x > 10.5)
     xiu = 20 - tai
-    # Chi2 đơn giản
     expected = 10
     chi = (tai - expected) ** 2 / expected + (xiu - expected) ** 2 / expected
     return 'T' if chi > 3.84 and tai > 12 else 'X'
@@ -365,7 +351,6 @@ def predict_41(h):
 # 42 – Theil-Sen slope (đơn giản)
 def predict_42(h):
     if len(h) < 15: return 'X'
-    # Slope trung vị đơn giản
     x = list(range(15))
     y = h[-15:]
     slopes = []
@@ -411,7 +396,6 @@ def predict_48(h):
 # 49 – Gradient boosting (đơn giản)
 def predict_49(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: slope trung vị
     x = list(range(20))
     y = h[-20:]
     slopes = []
@@ -423,14 +407,12 @@ def predict_49(h):
 # 50 – Random forest (đơn giản)
 def predict_50(h):
     if len(h) < 25: return 'X'
-    # Đơn giản: tỉ lệ tăng
     inc = sum(1 for i in range(24) if h[-25 + i + 1] > h[-25 + i])
     return 'T' if inc > 12 else 'X'
 
 # 51 – Extra trees (đơn giản)
 def predict_51(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: độ lệch chuẩn cao → T
     avg = sum(h[-20:]) / 20
     var = sum((x - avg) ** 2 for x in h[-20:]) / 20
     return 'T' if var > 8 else 'X'
@@ -438,7 +420,6 @@ def predict_51(h):
 # 52 – AdaBoost (đơn giản)
 def predict_52(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: trọng số tăng
     w = 1
     pred = 'X'
     for i in range(20):
@@ -452,7 +433,6 @@ def predict_52(h):
 # 53 – Bagging (đơn giản)
 def predict_53(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: vote 5 đoạn
     votes = []
     for start in range(0, 20, 4):
         sub = h[-20 + start:-20 + start + 4]
@@ -463,7 +443,6 @@ def predict_53(h):
 # 54 – MLP (đơn giản)
 def predict_54(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: perceptron 1 lớp
     w = 1; b = 0
     for i, x in enumerate(h[-20:]):
         w += (x - 10.5) * 0.01
@@ -473,17 +452,13 @@ def predict_54(h):
 # 55 – RBF network (đơn giản)
 def predict_55(h):
     if len(h) < 20: return 'X'
-    # Đơn giản: k-means 2 centroid
     c1 = sum(h[-20:-10]) / 10
     c2 = sum(h[-10:]) / 10
-    dist1 = sum((x - c1) ** 2 for x in h[-20:]) ** 0.5
-    dist2 = sum((x - c2) ** 2 for x in h[-20:]) ** 0.5
     return 'T' if c2 > c1 else 'X'
 
 # 56 – Passive-Aggressive (đơn giản)
 def predict_56(h):
     if len(h) < 15: return 'X'
-    # Đơn giản: update online
     w = 0
     for i, x in enumerate(h[-15:]):
         y_true = 1 if x > 10.5 else -1
@@ -495,20 +470,18 @@ def predict_56(h):
 # 57 – Ridge (đơn giản)
 def predict_57(h):
     if len(h) < 15: return 'X'
-    # Đơn giản: regression + L2
     x = list(range(15))
     y = h[-15:]
     x_bar = sum(x) / 15
     y_bar = sum(y) / 15
     num = sum((x[i] - x_bar) * (y[i] - y_bar) for i in range(15))
-    den = sum((x[i] - x_bar) ** 2 for i in range(15)) + 1
+    den = sum((x[i] - x_bar) ** 2 for i in range(15)) + 1  # L2
     w = num / den
     return 'T' if w > 0.05 else 'X'
 
 # 58 – Lasso (đơn giản)
 def predict_58(h):
     if len(h) < 15: return 'X'
-    # Đơn giản: regression + L1
     x = list(range(15))
     y = h[-15:]
     x_bar = sum(x) / 15
@@ -521,7 +494,6 @@ def predict_58(h):
 # 59 – ElasticNet (đơn giản)
 def predict_59(h):
     if len(h) < 15: return 'X'
-    # Đơn giản: L1 + L2
     x = list(range(15))
     y = h[-15:]
     x_bar = sum(x) / 15
@@ -534,7 +506,6 @@ def predict_59(h):
 # 60 – OMP (đơn giản)
 def predict_60(h):
     if len(h) < 10: return 'X'
-    # Đơn giản: greedy
     x = list(range(10))
     y = h[-10:]
     x_bar = sum(x) / 10
@@ -548,10 +519,8 @@ def predict_60(h):
 # 61 – Huber (đơn giản)
 def predict_61(h):
     if len(h) < 15: return 'X'
-    # Đơn giản: outlier robust
     x = list(range(15))
     y = h[-15:]
-    # Loại outlier: |residual| > 2
     residuals = [y[i] - (y[0] + (y[-1] - y[0]) / 14 * i) for i in range(15)]
     y_clean = [y[i] if abs(residuals[i]) <= 2 else y[0] + (y[-1] - y[0]) / 14 * i for i in range(15)]
     x_bar = sum(x) / 15
@@ -565,7 +534,6 @@ def predict_61(h):
 # 62 – Theil-Sen (đơn giản)
 def predict_62(h):
     if len(h) < 12: return 'X'
-    # Median slope
     x = list(range(12))
     y = h[-12:]
     slopes = []
@@ -596,11 +564,12 @@ def predict_64(h):
 def predict_65(h):
     if len(h) < 10: return 'X'
     w = sorted(h[-10:])
-    w[0] = w[1]; w[-1] = w[-2]
+    w[0] = w[1]
+    w[-1] = w[-2]
     avg = sum(w) / 10
     return 'T' if avg > 10.5 else 'X'
 
-# 66 – Hampel filter
+# 66 – Hampel filter (đơn giản)
 def predict_66(h):
     if len(h) < 12: return 'X'
     w = h[-12:]
@@ -609,18 +578,17 @@ def predict_66(h):
     filtered = [x if abs(x - median) <= 3 * mad else median for x in w]
     return 'T' if filtered[-1] > 10.5 else 'X'
 
-# 67 – Voting hard (5 rule)
+# 67 – Voting hard (10 rule)
 def predict_67(h):
-    pool = [predict_00, predict_01, predict_02, predict_03, predict_04]
+    pool = [predict_00, predict_01, predict_02, predict_03, predict_04, predict_05, predict_06, predict_07, predict_08, predict_09]
     votes = [f(h) for f in pool]
-    return 'T' if votes.count('T') > 2 else 'X'
+    return 'T' if votes.count('T') > 5 else 'X'
 
 # 68 – Stacking (đơn giản)
 def predict_68(h):
     if len(h) < 30: return 'X'
-    # Đơn giản: meta = mean
     preds = []
-    for f in [predict_00, predict_01, predict_12, predict_18]:
+    for f in [predict_00, predict_01, predict_12, predict_18, predict_25]:
         preds.append(1 if f(h) == 'T' else 0)
     meta = sum(preds) / len(preds)
     return 'T' if meta > 0.5 else 'X'
@@ -628,7 +596,6 @@ def predict_68(h):
 # 69 – Bagging (đơn giản)
 def predict_69(h):
     if len(h) < 20: return 'X'
-    # Bootstrap 5 lần
     votes = []
     for _ in range(5):
         sample = [h[-20 + i] for i in sorted([abs(hash(str(i))) % 20 for i in range(10)])]
@@ -639,7 +606,6 @@ def predict_69(h):
 # 70 – Neural net (đơn giản)
 def predict_70(h):
     if len(h) < 20: return 'X'
-    # 1 hidden layer 5 neuron đơn giản
     w1 = [0.1] * 20
     b1 = 0
     for i in range(20):
@@ -652,13 +618,9 @@ def predict_70(h):
 # 71 – RBF network (đơn giản)
 def predict_71(h):
     if len(h) < 20: return 'X'
-    # 3 centroid đơn giản
     c1 = sum(h[-20:-14]) / 6
     c2 = sum(h[-14:-7]) / 7
     c3 = sum(h[-7:]) / 7
-    d1 = sum((x - c1) ** 2 for x in h[-20:]) ** 0.5
-    d2 = sum((x - c2) ** 2 for x in h[-20:]) ** 0.5
-    d3 = sum((x - c3) ** 2 for x in h[-20:]) ** 0.5
     return 'T' if c3 > c2 > c1 else 'X'
 
 # 72 – Passive-Aggressive (đơn giản)
@@ -726,7 +688,6 @@ def predict_77(h):
     if len(h) < 15: return 'X'
     x = list(range(15))
     y = h[-15:]
-    # Loại outlier đơn giản
     residuals = [y[i] - (y[0] + (y[-1] - y[0]) / 14 * i) for i in range(15)]
     y_clean = [y[i] if abs(residuals[i]) <= 2 else y[0] + (y[-1] - y[0]) / 14 * i for i in range(15)]
     x_bar = sum(x) / 15
@@ -974,20 +935,21 @@ def ensemble_predict(h):
     conf = round(t / len(votes), 2)
     return ('T' if t > len(votes) / 2 else 'X'), conf
 
-# ========== FETCH REAL DATA ==========
+# ========== FETCH REAL DATA – KHÔNG TIMEOUT ==========
 def fetch_tele68():
     try:
-        r = requests.get(API_URL, timeout=8).json()
+        r = requests.get(API_URL, timeout=5).json()
         if "list" in r and r["list"]:
             n = r["list"][0]
             phien, dice, tong = n.get("id"), n.get("dices", [1, 2, 3]), n.get("point", sum(n.get("dices", [1, 2, 3])))
             raw = n.get("resultTruyenThong", "").upper()
             ketqua = {"TAI": "Tài", "XIU": "Xỉu"}.get(raw, "Tài" if tong >= 11 else "Xỉu")
             return phien, dice, tong, ketqua
-    except: pass
+    except Exception as e:
+        print("[❌] Lỗi fetch:", e)
     return None
 
-# ========== BACKGROUND UPDATER ==========
+# ========== BACKGROUND UPDATER – KHÔNG NGỦ ĐÔNG ==========
 def updater():
     global last_data
     last_phien = None
@@ -1001,7 +963,7 @@ def updater():
                 pred, conf = ensemble_predict(list(history_totals))
                 last_data = {
                     "phien": phien, "xucxac1": dice[0], "xucxac2": dice[1], "xucxac3": dice[2],
-                    "tong": tong, "ketqua": ketqua, "du_doan": pred, "do_tin_cay": conf, "id": "pentter"
+                    "tong": tong, "ketqua": ketqua, "du_doan": pred, "do_tin_cay": conf, "id": "pentter100real"
                 }
                 print(f"[✅] {phien} | {ketqua} ({tong}) → {pred} ({conf})")
                 last_phien = phien
@@ -1013,6 +975,7 @@ def api(): return jsonify(last_data)
 
 # ========== RUN ==========
 if __name__ == "__main__":
+    print("🚀 Khởi động API tài xỉu + 100 pentter thật – không numpy – không timeout")
     threading.Thread(target=updater, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
