@@ -7208,8 +7208,8 @@ def get_taixiu_data():
             elif raw == "XIU":
                 cau += "X"
 
-        # lấy 13 ký tự cuối để tra bảng
-        key = cau[-13:]
+        # lấy 12 ký tự cuối để tra bảng
+        key = cau[-12:]
 
         du_doan = prediction_table.get(key, "Không xác định")
 
